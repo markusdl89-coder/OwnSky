@@ -3,30 +3,45 @@ import os
 import threading
 import time
 from telebot import types
-from config import USER_SHIPS
+from config import USER_SHIPS, CITIES, RESOURCE_WEIGHTS
 from core import GameCore
 
+# Поиск токена в секретных настройках Render
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "ВАШ_ТОКЕН_БОТА")
 bot = telebot.TeleBot(BOT_TOKEN)
 
+# Фоновый игровой цикл (сердце сервера)
 def game_loop():
     while True:
-        time.sleep(3)
+        time.sleep(3) # 1 тик = 3 секунды реальности
+        
+        # Пассивная добыча угля и плавка стали в городах
+        GameCore.update_world_production()
+        
+        # Движение кораблей всех активных игроков
         for chat_id in list(USER_SHIPS.keys()):
             status = GameCore.process_flight_tick(chat_id)
             
             if status == "arrived":
-                bot.send_message(chat_id, "🔔 **Бортовой журнал:** Дирижабль успешно приземлился в пункте назначения!")
+                ship = USER_SHIPS[chat_id]
+                # Проверяем, в какой город прилетел корабль
+                for city_id, city_data in CITIES.items():
+                    if city_data["x"] == ship["x"] and city_data["y"] == ship["y"]:
+                        ship["current_city_id"] = city_id
+                        bot.send_message(chat_id, f"🔔 **Бортовой журнал:** Приземлились в порту: {city_data['name']}!")
+                        break
             elif status == "no_fuel_crash":
-                bot.send_message(chat_id, "🚨 **КАТАСТРОФА:** Топливо иссякло. Корабль рухнул в облака. Ваш экипаж погиб.")
+                bot.send_message(chat_id, "🚨 **КАТАСТРОФА:** Топливо иссякло. Корабль рухнул. Экипаж погиб.")
 
+# Включение фонового цикла на сервере
 threading.Thread(target=game_loop, daemon=True).start()
-
+# Обработчик стартовой команды /start
 @bot.message_handler(commands=['start'])
 def start_command(message):
     chat_id = message.chat.id
-    GameCore.init_ship(chat_id)
+    GameCore.init_ship(chat_id) # Создаем новый корабль
     
+    # Кнопки меню внизу экрана
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     btn_status = types.KeyboardButton("📊 Статус дирижабля")
     btn_crew = types.KeyboardButton("👥 Экипаж")
@@ -35,13 +50,17 @@ def start_command(message):
     
     bot.send_message(
         chat_id, 
-        "Приветствую, Адмирал! Ваш стартовый дирижабль готов к вылету.\n\n"
-        "Используйте кнопки меню для управления.\n"
-        "Чтобы отправить корабль в полет, введите команду: `/fly X Y` (например: `/fly 300 400`)", 
+        "Приветствую, Адмирал! Ваш стартовый дирижабль пришвартован в Горне.\n\n"
+        "📜 **Команды торговли:**\n"
+        "• Цены в порту: кнопка `📖 Бортовой журнал`\n"
+        "• Купить груз: `/buy coal 5` (5 ед. угля)\n"
+        "• Продать груз: `/sell coal 5`\n"
+        "• Взлет в Пар-Сити: `/fly 400 500`", 
         reply_markup=markup,
         parse_mode="Markdown"
     )
 
+# Обработчик кнопки "📊 Статус дирижабля"
 @bot.message_handler(func=lambda message: message.text == "📊 Статус дирижабля")
 def ship_status(message):
     chat_id = message.chat.id
@@ -51,37 +70,148 @@ def ship_status(message):
     ship = USER_SHIPS[chat_id]
     
     if ship["status"] == "wrecked":
-        bot.send_message(chat_id, "💀 Ваш дирижабль разбит. Используйте /start для постройки нового судна.")
+        bot.send_message(chat_id, "💀 Ваш дирижабль разбит. Напишите /start.")
         return
 
+    # Вес груза в килограммах
+    current_weight = GameCore.get_cargo_weight(ship)
+    
     status_text = (
         f"🛸 **Дирижабль:** {ship['name']}\n"
         f"⚙️ **Статус:** {'В полете 🌤️' if ship['status'] == 'in_flight' else 'В порту ⚓'}\n"
-        f"📍 **Текущие координаты:** X: {ship['x']:.1f}, Y: {ship['y']:.1f}\n"
+        f"📍 **Координаты:** X: {ship['x']:.1f}, Y: {ship['y']:.1f}\n"
         f"⛽ **Топливо:** {ship['fuel']:.1f} / {ship['max_fuel']:.1f} л.\n"
+        f"💰 **Капитал:** {ship['credits']} кредитов\n"
+        f"📦 **Трюм ({current_weight} / {ship['max_cargo_weight']} кг):**\n"
+        f" ├ Уголь: {ship['cargo']['coal']} ед.\n"
+        f" ├ Железная руда: {ship['cargo']['iron_ore']} ед.\n"
+        f" ├ Сталь: {ship['cargo']['steel']} ед.\n"
+        f" └ Инструменты: {ship['cargo']['tools']} ед.\n"
     )
     
     if ship["status"] == "in_flight":
         dist = GameCore.calculate_distance(ship["x"], ship["y"], ship["target_x"], ship["target_y"])
-        status_text += f"🎯 **Цель:** X: {ship['target_x']}, Y: {ship['target_y']}\n"
+        status_text += f"\n🎯 **Цель:** X: {ship['target_x']}, Y: {ship['target_y']}\n"
         status_text += f"📏 **Осталось лететь:** {dist:.1f} метров."
         
     bot.send_message(chat_id, status_text, parse_mode="Markdown")
-
-@bot.message_handler(func=lambda message: message.text in ["👥 Экипаж", "📖 Бортовой журнал"])
-def placeholder_buttons(message):
-    bot.send_message(message.chat.id, f"Вы нажали '{message.text}'. Этот модуль сейчас находится в разработке.")
-
-@bot.message_handler(commands=['fly'])
-def start_flight(message):
+# Обработчик кнопки "📖 Бортовой журнал" (Биржа города)
+@bot.message_handler(func=lambda message: message.text == "📖 Бортовой журнал")
+def port_market_info(message):
     chat_id = message.chat.id
     if chat_id not in USER_SHIPS:
         GameCore.init_ship(chat_id)
         
     ship = USER_SHIPS[chat_id]
-    
     if ship["status"] == "in_flight":
-        bot.send_message(chat_id, "❌ Корабль уже находится в воздухе! Дождитесь посадки.")
+        bot.send_message(chat_id, "📖 В воздухе доступ к складам портов закрыт.")
+        return
+
+    city_id = ship["current_city_id"]
+    city = CITIES[city_id]
+    
+    market_text = (
+        f"⚓ **Вы в порту:** {city['name']}\n"
+        f"📍 **Координаты:** X: {city['x']}, Y: {city['y']}\n"
+        f"📈 **Эффективность:** {city['production_speed'] * 100:.0f}%\n\n"
+        f"🏪 **БИРЖА ГОРОДА (Склады и цены):**\n"
+    )
+    
+    for resource, amount in city["stockpile"].items():
+        price = city["prices"].get(resource, 0)
+        weight = RESOURCE_WEIGHTS.get(resource, 0)
+        
+        ru_names = {"coal": "Уголь", "iron_ore": "Железо", "steel": "Сталь", "tools": "Инструменты"}
+        res_name = ru_names.get(resource, resource)
+        
+        price_text = f"{price} кр." if price > 0 else "Не торгуется"
+        market_text += f" ├ {res_name}: {amount} ед. | Цена: {price_text} ({weight} кг)\n"
+
+    bot.send_message(chat_id, market_text, parse_mode="Markdown")
+
+@bot.message_handler(func=lambda message: message.text == "👥 Экипаж")
+def crew_placeholder(message):
+    bot.send_message(message.chat.id, "👥 Модуль экипажа находится в разработке.")
+
+# Покупка товара в городе (/buy coal 5)
+@bot.message_handler(commands=['buy'])
+def buy_resource(message):
+    chat_id = message.chat.id
+    ship = USER_SHIPS.get(chat_id)
+    if not ship or ship["status"] == "in_flight":
+        bot.send_message(chat_id, "❌ Нельзя торговать в полете!")
+        return
+
+    try:
+        parts = message.text.split()
+        resource = parts[1] # какой ресурс
+        quantity = int(parts[2]) # сколько штук
+        city = CITIES[ship["current_city_id"]]
+        
+        if resource not in city["stockpile"] or city["prices"].get(resource, 0) == 0:
+            bot.send_message(chat_id, "❌ Товар здесь не продается.")
+            return
+            
+        price = city["prices"][resource]
+        total_cost = price * quantity
+        added_weight = quantity * RESOURCE_WEIGHTS.get(resource, 0)
+        
+        if city["stockpile"][resource] < quantity:
+            bot.send_message(chat_id, "❌ Нет такого количества на складе.")
+            return
+        if ship["credits"] < total_cost:
+            bot.send_message(chat_id, "❌ Нехватка кредитов.")
+            return
+        if GameCore.get_cargo_weight(ship) + added_weight > ship["max_cargo_weight"]:
+            bot.send_message(chat_id, "❌ Перегруз трюма!")
+            return
+            
+        city["stockpile"][resource] -= quantity
+        ship["cargo"][resource] += quantity
+        ship["credits"] -= total_cost
+        bot.send_message(chat_id, f"✅ Куплено {quantity} ед. за {total_cost} кр.!")
+    except (IndexError, ValueError):
+        bot.send_message(chat_id, "⚠️ Формат: `/buy coal 5`", parse_mode="Markdown")
+
+# Продажа товара в городе (/sell coal 5)
+@bot.message_handler(commands=['sell'])
+def sell_resource(message):
+    chat_id = message.chat.id
+    ship = USER_SHIPS.get(chat_id)
+    if not ship or ship["status"] == "in_flight":
+        bot.send_message(chat_id, "❌ Нельзя торговать в полете!")
+        return
+
+    try:
+        parts = message.text.split()
+        resource = parts[1]
+        quantity = int(parts[2])
+        city = CITIES[ship["current_city_id"]]
+        
+        if ship["cargo"].get(resource, 0) < quantity:
+            bot.send_message(chat_id, "❌ Нет товара в трюме.")
+            return
+        if city["prices"].get(resource, 0) == 0:
+            bot.send_message(chat_id, "❌ Город не принимает этот товар.")
+            return
+            
+        price = city["prices"][resource]
+        total_profit = price * quantity
+        
+        ship["cargo"][resource] -= quantity
+        city["stockpile"][resource] += quantity
+        ship["credits"] += total_profit
+        bot.send_message(chat_id, f"✅ Продано {quantity} ед. за {total_profit} кр.!")
+    except (IndexError, ValueError):
+        bot.send_message(chat_id, "⚠️ Формат: `/sell coal 5`", parse_mode="Markdown")
+
+# Команда взлета /fly X Y
+@bot.message_handler(commands=['fly'])
+def start_flight(message):
+    chat_id = message.chat.id
+    ship = USER_SHIPS.get(chat_id)
+    if ship["status"] == "in_flight":
+        bot.send_message(chat_id, "❌ Мы уже в воздухе!")
         return
         
     try:
@@ -92,10 +222,10 @@ def start_flight(message):
         ship["target_x"] = target_x
         ship["target_y"] = target_y
         ship["status"] = "in_flight"
-        
-        bot.send_message(chat_id, f"🛫 **Взлет разрешен!** Курс на координаты X: {target_x}, Y: {target_y}.\nСледите за приборами в меню 'Статус'.")
+        ship["current_city_id"] = None # Оторвались от земли
+        bot.send_message(chat_id, f"🛫 **Взлет!** Курс на X: {target_x}, Y: {target_y}.")
     except (IndexError, ValueError):
-        bot.send_message(chat_id, "⚠️ **Ошибка формата.** Пишите команду так:\n`/fly 300 400` (где числа — это X и Y)", parse_mode="Markdown")
+        bot.send_message(chat_id, "⚠️ Формат: `/fly 400 500`", parse_mode="Markdown")
 
 if __name__ == '__main__':
     bot.polling(none_stop=True)
