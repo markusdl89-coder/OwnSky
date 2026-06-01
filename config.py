@@ -1,14 +1,9 @@
-import os
-
-# Робот сам возьмет токен из настроек сервера
-TOKEN = os.environ.get("BOT_TOKEN")
-
-# Переключатели модулей игры
 FEATURE_TOGGLES = {
-    "core_interface": True,     
-    "crew_management": True,    
-    "tactical_doctrines": False, 
-    "expeditions": False        
+    "flight_system": True,
+    "crew_simulation": False,
+    "doctrinal_logic": True
 }
+
+START_PORT = {"name": "Нью-Аркхем (Порт А)", "x": 100.0, "y": 100.0}
 
 USER_SHIPS = {}
