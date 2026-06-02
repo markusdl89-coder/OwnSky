@@ -48,18 +48,20 @@ def start_command(message):
     btn_journal = types.KeyboardButton("📖 Бортовой журнал")
     markup.add(btn_status, btn_crew, btn_journal)
     
-        bot.send_message(
-        chat_id,
-        "Приветствую, Адмирал! Ваш стартовый дирижабль пришвартован в Горне.\n\n"
-        "📜 **Команды торговли:**\n"
-        "• Цены в порту: кнопка 💼 Бортовой журнал\n"
-        "• Купить груз: `/buy [название] [количество]`\n"
-        "  (Примеры: `/buy coal 5` или `/buy iron_ore 10`)\n"
-        "• Продать груз: `/sell [название] [количество]`\n"
-        "• Взлет в Пар-Сити: `/fly 400 500`\n",
-        reply_markup=markup,
-        parse_mode="Markdown"
-    )
+ # Убрали отступ перед bot.send_message, чтобы Python не ругался на синтаксис
+bot.send_message(
+    chat_id,
+    "Приветствую, Адмирал! Ваш стартовый дирижабль пришвартован в Горне.\n\n"
+    "📜 **Команды торговли:**\n"
+    "• Цены в порту: кнопка 💼 Бортовой журнал\n"
+    "• Купить груз: `/buy [название] [количество]`\n"
+    "  (Примеры: `/buy coal 5` или `/buy iron_ore 10`)\n"
+    "• Продать груз: `/sell [название] [количество]`\n"
+    "• Взлет в Пар-Сити: `/fly 400 500`\n",
+    reply_markup=markup,
+    parse_mode="Markdown"
+)
+
 
 # Обработчик кнопки "📊 Статус дирижабля"
 @bot.message_handler(func=lambda message: message.text == "📊 Статус дирижабля")
