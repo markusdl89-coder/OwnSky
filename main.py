@@ -48,16 +48,15 @@ def start_command(message):
     btn_journal = types.KeyboardButton("📖 Бортовой журнал")
     markup.add(btn_status, btn_crew, btn_journal)
     
-    bot.send_message(
-        chat_id, 
-                "Приветствую, Адмирал! Ваш стартовый дирижабль пришвартован в Горне.\n\n"
+        bot.send_message(
+        chat_id,
+        "Приветствую, Адмирал! Ваш стартовый дирижабль пришвартован в Горне.\n\n"
         "📜 **Команды торговли:**\n"
-        "• Цены в порту: кнопка `📖 Бортовой журнал`\n"
+        "• Цены в порту: кнопка 💼 Бортовой журнал\n"
         "• Купить груз: `/buy [название] [количество]`\n"
-        "  (Примеры: /buy coal 5` или `/buy iron_ore 10`)\n"
+        "  (Примеры: `/buy coal 5` или `/buy iron_ore 10`)\n"
         "• Продать груз: `/sell [название] [количество]`\n"
-        "• Взлет в Пар-Сити: `/fly 400 500`", 
-
+        "• Взлет в Пар-Сити: `/fly 400 500`\n",
         reply_markup=markup,
         parse_mode="Markdown"
     )
@@ -65,6 +64,7 @@ def start_command(message):
 # Обработчик кнопки "📊 Статус дирижабля"
 @bot.message_handler(func=lambda message: message.text == "📊 Статус дирижабля")
 def ship_status(message):
+
     chat_id = message.chat.id
     if chat_id not in USER_SHIPS:
         GameCore.init_ship(chat_id)
