@@ -74,16 +74,16 @@ def ship_status(message):
     current_weight = GameCore.get_cargo_weight(ship)
     
         status_text = (
-        f"🛸 **Дирижабль:** {ship['name']}\n"
-        f"🌟 **Статус:** {'В полете 🚀' if ship['status'] == 'in_flight' else 'В порту ⚓️'}\n"
-        f"📍 **Координаты:** X: {ship['x']:.1f}, Y: {ship['y']:.1f}\n"
-        f"⛽️ **Топливо:** {ship['fuel']:.1f} / {ship['max_fuel']:.1f} л.\n"
-        f"💰 **Капитал:** {ship['credits']} кредитов\n"
-        f"📦 **Трюм:** ({current_weight} / {ship['max_cargo_weight']}) кг:\n"
-        f"🪵 Уголь: {ship['cargo']['coal']} ед.\n"
-        f"🪨 Железная руда: {ship['cargo']['iron_ore']} ед.\n"
-        f"🔩 Сталь: {ship['cargo']['steel']} ед.\n"
-        f"⚙️ Инструменты: {ship['cargo']['tools']} ед.\n"
+            f"🛸 **Дирижабль:** {ship['name']}\n"
+            f"🌟 **Статус:** {'В полете 🚀' if ship['status'] == 'in_flight' else 'В порту ⚓️'}\n"
+            f"📍 **Координаты:** X: {ship['x']:.1f}, Y: {ship['y']:.1f}\n"
+            f"⛽️ **Топливо:** {ship['fuel']:.1f} / {ship['max_fuel']:.1f} л.\n"
+            f"💰 **Капитал:** {ship['credits']} кредитов\n"
+            f"📦 **Трюм:** ({current_weight} / {ship['max_cargo_weight']}) кг:\n"
+            f"🪵 Уголь: {ship['cargo']['coal']} ед.\n"
+            f"🪨 Железная руда: {ship['cargo']['iron_ore']} ед.\n"
+            f"🔩 Сталь: {ship['cargo']['steel']} ед.\n"
+            f"⚙️ Инструменты: {ship['cargo']['tools']} ед.\n"
     )
 
     if ship["status"] == "in_flight":
