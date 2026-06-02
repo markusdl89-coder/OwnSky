@@ -35,22 +35,29 @@ def game_loop():
 
 # Включение фонового цикла на сервере
 threading.Thread(target=game_loop, daemon=True).start()
+
 # Обработчик стартовой команды /start
 @bot.message_handler(commands=['start'])
-def start_message(message):
+def start_command(message):
     chat_id = message.chat.id
-    if chat_id not in USER_SHIPS:
-        GameCore.init_ship(chat_id)
-
+    GameCore.init_ship(chat_id) # Создаем новый корабль
+    
+    # Кнопки меню внизу экрана
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    btn_status = types.KeyboardButton("📊 Статус дирижабля")
+    btn_crew = types.KeyboardButton("👥 Экипаж")
+    btn_journal = types.KeyboardButton("📖 Бортовой журнал")
+    markup.add(btn_status, btn_crew, btn_journal)
+    
     bot.send_message(
-        chat_id,
+        chat_id, 
         "Приветствую, Адмирал! Ваш стартовый дирижабль пришвартован в Горне.\n\n"
         "📜 **Команды торговли:**\n"
-        "• Цены в порту: кнопка 💼 Бортовой журнал\n"
+        "• Цены в порту: кнопка `📖 Бортовой журнал`\n"
         "• Купить груз: `/buy [название] [количество]`\n"
         "  (Примеры: `/buy coal 5` или `/buy iron_ore 10`)\n"
         "• Продать груз: `/sell [название] [количество]`\n"
-        "• Взлет в Пар-Сити: `/fly 400 500`\n",
+        "• Взлет в Пар-Сити: `/fly 400 500`", 
         reply_markup=markup,
         parse_mode="Markdown"
     )
@@ -58,8 +65,6 @@ def start_message(message):
 # Обработчик кнопки "📊 Статус дирижабля"
 @bot.message_handler(func=lambda message: message.text == "📊 Статус дирижабля")
 def ship_status(message):
-
-
     chat_id = message.chat.id
     if chat_id not in USER_SHIPS:
         GameCore.init_ship(chat_id)
@@ -73,27 +78,25 @@ def ship_status(message):
     # Вес груза в килограммах
     current_weight = GameCore.get_cargo_weight(ship)
     
-         # Формируем текст статуса через тройные кавычки — это защитит от ошибок сдвига строк
-    status_text = f"""🛸 **Дирижабль:** {ship['name']}
-🌟 **Статус:** {'В полете 🚀' if ship['status'] == 'in_flight' else 'В порту ⚓️'}
-📍 **Координаты:** X: {ship['x']:.1f}, Y: {ship['y']:.1f}
-⛽️ **Топливо:** {ship['fuel']:.1f} / {ship['max_fuel']:.1f} л.
-💰 **Капитал:** {ship['credits']} кредитов
-📦 **Трюм:** ({current_weight} / {ship['max_cargo_weight']}) кг:
-🪵 Уголь: {ship['cargo']['coal']} ед.
-🪨 Железная руда: {ship['cargo']['iron_ore']} ед.
-🔩 Сталь: {ship['cargo']['steel']} ед.
-⚙️ Инструменты: {ship['cargo']['tools']} ед."""
-
+    status_text = (
+        f"🛸 **Дирижабль:** {ship['name']}\n"
+        f"⚙️ **Статус:** {'В полете 🌤️' if ship['status'] == 'in_flight' else 'В порту ⚓'}\n"
+        f"📍 **Координаты:** X: {ship['x']:.1f}, Y: {ship['y']:.1f}\n"
+        f"⛽ **Топливо:** {ship['fuel']:.1f} / {ship['max_fuel']:.1f} л.\n"
+        f"💰 **Капитал:** {ship['credits']} кредитов\n"
+        f"📦 **Трюм ({current_weight} / {ship['max_cargo_weight']} кг):**\n"
+        f" ├ Уголь: {ship['cargo']['coal']} ед.\n"
+        f" ├ Железная руда: {ship['cargo']['iron_ore']} ед.\n"
+        f" ├ Сталь: {ship['cargo']['steel']} ед.\n"
+        f" └ Инструменты: {ship['cargo']['tools']} е단.\n"
     )
-
+    
     if ship["status"] == "in_flight":
         dist = GameCore.calculate_distance(ship["x"], ship["y"], ship["target_x"], ship["target_y"])
         status_text += f"\n🎯 **Цель:** X: {ship['target_x']}, Y: {ship['target_y']}\n"
-        status_text += f"⏳ **Осталось лететь:** {dist:.1f} метров."
-
+        status_text += f"📏 **Осталось лететь:** {dist:.1f} метров."
+        
     bot.send_message(chat_id, status_text, parse_mode="Markdown")
-
 # Обработчик кнопки "📖 Бортовой журнал" (Биржа города)
 @bot.message_handler(func=lambda message: message.text == "📖 Бортовой журнал")
 def port_market_info(message):
@@ -226,21 +229,5 @@ def start_flight(message):
     except (IndexError, ValueError):
         bot.send_message(chat_id, "⚠️ Формат: `/fly 400 500`", parse_mode="Markdown")
 
-# Создаем микро-веб-сервер, чтобы Render не отключал бота по таймауту портов
-import os
-from flask import Flask
-import threading
-
-app = Flask('')
-
-@app.route('/')
-def home():
-    return "Цеппелин OWNSKY запущен и держит высоту!"
-
-def run_web_server():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
-
 if __name__ == '__main__':
-    threading.Thread(target=run_web_server, daemon=True).start()
     bot.polling(none_stop=True)
