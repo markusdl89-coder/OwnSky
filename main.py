@@ -73,27 +73,26 @@ def ship_status(message):
     # Вес груза в килограммах
     current_weight = GameCore.get_cargo_weight(ship)
     
-    status_text = (
+        status_text = (
         f"🛸 **Дирижабль:** {ship['name']}\n"
-        f"⚙️ **Статус:** {'В полете 🌤️' if ship['status'] == 'in_flight' else 'В порту ⚓'}\n"
+        f"🌟 **Статус:** {'В полете 🚀' if ship['status'] == 'in_flight' else 'В порту ⚓️'}\n"
         f"📍 **Координаты:** X: {ship['x']:.1f}, Y: {ship['y']:.1f}\n"
-        f"⛽ **Топливо:** {ship['fuel']:.1f} / {ship['max_fuel']:.1f} л.\n"
+        f"⛽️ **Топливо:** {ship['fuel']:.1f} / {ship['max_fuel']:.1f} л.\n"
         f"💰 **Капитал:** {ship['credits']} кредитов\n"
-        f"📦 **Трюм ({current_weight} / {ship['max_cargo_weight']} кг):**\n"
-        f" ├ Уголь: {ship['cargo']['coal']} ед.\n"
-        f" ├ Железная руда: {ship['cargo']['iron_ore']} ед.\n"
-        f" ├ Сталь: {ship['cargo']['steel']} ед.\n"
+        f"📦 **Трюм:** ({current_weight} / {ship['max_cargo_weight']}) кг:\n"
+        f"🪵 Уголь: {ship['cargo']['coal']} ед.\n"
+        f"🪨 Железная руда: {ship['cargo']['iron_ore']} ед.\n"
+        f"🔩 Сталь: {ship['cargo']['steel']} ед.\n"
         f"⚙️ Инструменты: {ship['cargo']['tools']} ед.\n"
     )
-)
 
-    
     if ship["status"] == "in_flight":
         dist = GameCore.calculate_distance(ship["x"], ship["y"], ship["target_x"], ship["target_y"])
         status_text += f"\n🎯 **Цель:** X: {ship['target_x']}, Y: {ship['target_y']}\n"
-        status_text += f"📏 **Осталось лететь:** {dist:.1f} метров."
-        
+        status_text += f"⏳ **Осталось лететь:** {dist:.1f} метров."
+
     bot.send_message(chat_id, status_text, parse_mode="Markdown")
+
 # Обработчик кнопки "📖 Бортовой журнал" (Биржа города)
 @bot.message_handler(func=lambda message: message.text == "📖 Бортовой журнал")
 def port_market_info(message):
