@@ -229,5 +229,23 @@ def start_flight(message):
     except (IndexError, ValueError):
         bot.send_message(chat_id, "⚠️ Формат: `/fly 400 500`", parse_mode="Markdown")
 
+# Создаем микро-веб-сервер, чтобы Render не отключал бота по таймауту портов
+import os # Импортируем модуль для работы с операционной системой
+from flask import Flask # Импортируем легкий веб-сервер Flask
+import threading # Импортируем потоки для одновременной работы сервера и бота
+
+app = Flask('') # Создаем левое веб-приложение
+
+@app.route('/') # Настраиваем главную страницу
+def home(): # Функция ответа для сервера Render
+    return "Цеппелин OWNSKY запущен и держит высоту!" # Этот текст увидит Render при проверке порта
+
+def run_web_server(): # Функция запуска веб-сервера
+    port = int(os.environ.get("PORT", 10000)) # Берем порт, который выдал Render (по умолчанию 10000)
+    app.run(host='0.0.0.0', port=port) # Запускаем сервер на весь мир
+
 if __name__ == '__main__':
+    # Запускаем веб-сервер Flask в отдельном фоновом потоке
+    threading.Thread(target=run_web_server, daemon=True).start() 
+    # Запускаем нашего Telegram-бота в основном потоке
     bot.polling(none_stop=True)
