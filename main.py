@@ -84,7 +84,7 @@ def ship_status(message):
         f" ├ Железная руда: {ship['cargo']['iron_ore']} ед.\n"
         f" ├ Сталь: {ship['cargo']['steel']} ед.\n"
         f" └ Инструменты: {ship['cargo']['tools']} ед.\n"
-    )
+    
     
     if ship["status"] == "in_flight":
         dist = GameCore.calculate_distance(ship["x"], ship["y"], ship["target_x"], ship["target_y"])
