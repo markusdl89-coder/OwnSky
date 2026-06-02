@@ -37,35 +37,28 @@ def game_loop():
 threading.Thread(target=game_loop, daemon=True).start()
 # Обработчик стартовой команды /start
 @bot.message_handler(commands=['start'])
-def start_command(message):
+def start_message(message):
     chat_id = message.chat.id
-    GameCore.init_ship(chat_id) # Создаем новый корабль
-    
-    # Кнопки меню внизу экрана
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    btn_status = types.KeyboardButton("📊 Статус дирижабля")
-    btn_crew = types.KeyboardButton("👥 Экипаж")
-    btn_journal = types.KeyboardButton("📖 Бортовой журнал")
-    markup.add(btn_status, btn_crew, btn_journal)
-    
- # Убрали отступ перед bot.send_message, чтобы Python не ругался на синтаксис
-bot.send_message(
-    chat_id,
-    "Приветствую, Адмирал! Ваш стартовый дирижабль пришвартован в Горне.\n\n"
-    "📜 **Команды торговли:**\n"
-    "• Цены в порту: кнопка 💼 Бортовой журнал\n"
-    "• Купить груз: `/buy [название] [количество]`\n"
-    "  (Примеры: `/buy coal 5` или `/buy iron_ore 10`)\n"
-    "• Продать груз: `/sell [название] [количество]`\n"
-    "• Взлет в Пар-Сити: `/fly 400 500`\n",
-    reply_markup=markup,
-    parse_mode="Markdown"
-)
+    if chat_id not in USER_SHIPS:
+        GameCore.init_ship(chat_id)
 
+    bot.send_message(
+        chat_id,
+        "Приветствую, Адмирал! Ваш стартовый дирижабль пришвартован в Горне.\n\n"
+        "📜 **Команды торговли:**\n"
+        "• Цены в порту: кнопка 💼 Бортовой журнал\n"
+        "• Купить груз: `/buy [название] [количество]`\n"
+        "  (Примеры: `/buy coal 5` или `/buy iron_ore 10`)\n"
+        "• Продать груз: `/sell [название] [количество]`\n"
+        "• Взлет в Пар-Сити: `/fly 400 500`\n",
+        reply_markup=markup,
+        parse_mode="Markdown"
+    )
 
 # Обработчик кнопки "📊 Статус дирижабля"
 @bot.message_handler(func=lambda message: message.text == "📊 Статус дирижабля")
 def ship_status(message):
+
 
     chat_id = message.chat.id
     if chat_id not in USER_SHIPS:
