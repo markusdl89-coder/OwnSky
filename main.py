@@ -73,17 +73,18 @@ def ship_status(message):
     # Вес груза в килограммах
     current_weight = GameCore.get_cargo_weight(ship)
     
-        status_text = (
-            f"🛸 **Дирижабль:** {ship['name']}\n"
-            f"🌟 **Статус:** {'В полете 🚀' if ship['status'] == 'in_flight' else 'В порту ⚓️'}\n"
-            f"📍 **Координаты:** X: {ship['x']:.1f}, Y: {ship['y']:.1f}\n"
-            f"⛽️ **Топливо:** {ship['fuel']:.1f} / {ship['max_fuel']:.1f} л.\n"
-            f"💰 **Капитал:** {ship['credits']} кредитов\n"
-            f"📦 **Трюм:** ({current_weight} / {ship['max_cargo_weight']}) кг:\n"
-            f"🪵 Уголь: {ship['cargo']['coal']} ед.\n"
-            f"🪨 Железная руда: {ship['cargo']['iron_ore']} ед.\n"
-            f"🔩 Сталь: {ship['cargo']['steel']} ед.\n"
-            f"⚙️ Инструменты: {ship['cargo']['tools']} ед.\n"
+         # Формируем текст статуса через тройные кавычки — это защитит от ошибок сдвига строк
+    status_text = f"""🛸 **Дирижабль:** {ship['name']}
+🌟 **Статус:** {'В полете 🚀' if ship['status'] == 'in_flight' else 'В порту ⚓️'}
+📍 **Координаты:** X: {ship['x']:.1f}, Y: {ship['y']:.1f}
+⛽️ **Топливо:** {ship['fuel']:.1f} / {ship['max_fuel']:.1f} л.
+💰 **Капитал:** {ship['credits']} кредитов
+📦 **Трюм:** ({current_weight} / {ship['max_cargo_weight']}) кг:
+🪵 Уголь: {ship['cargo']['coal']} ед.
+🪨 Железная руда: {ship['cargo']['iron_ore']} ед.
+🔩 Сталь: {ship['cargo']['steel']} ед.
+⚙️ Инструменты: {ship['cargo']['tools']} ед."""
+
     )
 
     if ship["status"] == "in_flight":
