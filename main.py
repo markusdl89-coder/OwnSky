@@ -1,3 +1,18 @@
+import http.server # Библиотека для создания мини-сайта
+import threading   # Библиотека для запуска процессов в фоне
+
+# Функция, которая обманывает Render и держит порт открытым
+def run_fake_server():
+    server_address = ('', 10000) # Render по умолчанию проверяет порт 10000
+    handler = http.server.SimpleHTTPRequestHandler
+    httpd = http.server.HTTPServer(server_address, handler)
+    httpd.serve_forever() # Запускаем вечный ответ для сервера Render
+
+# Запускаем наш мини-сайт в отдельном независимом потоке
+threading.Thread(target=run_fake_server, daemon=True).start()
+
+# --- ТВОЙ СТАРЫЙ КОД НАЧИНАЕТСЯ ЗДЕСЬ ---
+
 import telebot
 import os
 import threading
