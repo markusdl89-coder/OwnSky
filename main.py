@@ -15,8 +15,14 @@ threading.Thread(target=run_fake_server, daemon=True).start()
 
 import telebot
 import os
+
+# Подключаем функции нашей базы данных SQLite
+from database import init_db, register_player, get_player_status
+init_db() # Автоматически создает таблицы и файл ownsky.db при старте
+
 import threading
 import time
+
 from telebot import types
 from config import USER_SHIPS, CITIES, RESOURCE_WEIGHTS
 from core import GameCore
@@ -55,7 +61,7 @@ threading.Thread(target=game_loop, daemon=True).start()
 @bot.message_handler(commands=['start'])
 def start_command(message):
     chat_id = message.chat.id
-    GameCore.init_ship(chat_id) # Создаем новый корабль
+    register_player(chat_id)
     
     # Кнопки меню внизу экрана
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -246,3 +252,26 @@ def start_flight(message):
 
 if __name__ == '__main__':
     bot.polling(none_stop=True)
+# Обработчик команды /status для вывода профиля цеппелина на экран телефона
+@bot.message_handler(commands=['status'])
+def status_command(message):
+    chat_id = message.chat.id
+    data = get_player_status(chat_id) # Запрашиваем данные из файла SQLite
+    
+    if data:
+        # Распаковываем строки из базы в переменные
+        ship_name, credits, fuel, coal, ore, steel = data
+        
+        # Формируем красивый текст
+        text = (
+            f"🛸 Корабль: *{ship_name}*\n"
+            f"💰 Баланс: {credits:.1f} кр.\n"
+            f"⛽ Топливо: {fuel:.1f}/100 л.\n"
+            f"📦 Трюм:\n"
+            f" 🪵 Уголь: {coal:.1f} т.\n"
+            f" 🪨 Руда: {ore:.1f} т.\n"
+            f" 🪙 Сталь: {steel:.1f} т."
+        )
+        bot.send_message(chat_id, text, parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, "❌ Бортовой компьютер не найден. Напишите /start для регистрации!")
