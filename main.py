@@ -97,6 +97,7 @@ def ship_status(message):
         return
 
     # Вес груза в килограммах
+    # Вес груза в килограммах
     current_weight = GameCore.get_cargo_weight(ship)
     
     status_text = (
@@ -118,6 +119,7 @@ def ship_status(message):
         status_text += f"📏 **Осталось лететь:** {dist:.1f} метров."
         
     bot.send_message(chat_id, status_text, parse_mode="Markdown")
+
 # Обработчик кнопки "📖 Бортовой журнал" (Биржа города)
 @bot.message_handler(func=lambda message: message.text == "📖 Бортовой журнал")
 def port_market_info(message):
