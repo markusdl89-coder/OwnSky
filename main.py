@@ -87,38 +87,33 @@ def start_command(message):
 @bot.message_handler(func=lambda message: message.text == "📊 Статус дирижабля")
 def ship_status(message):
     chat_id = message.chat.id
-    if chat_id not in USER_SHIPS:
-        GameCore.init_ship(chat_id)
-        
-    ship = USER_SHIPS[chat_id]
+    data = get_player_status(chat_id)  # Запрашиваем данные строго из базы SQLite
     
-    if ship["status"] == "wrecked":
-        bot.send_message(chat_id, "💀 Ваш дирижабль разбит. Напишите /start.")
-        return
-
-    # Вес груза в килограммах
-    # Вес груза в килограммах
-    current_weight = GameCore.get_cargo_weight(ship)
+    if not data:
+        register_player(chat_id)  # Если игрока нет, регистрируем его в базе
+        data = get_player_status(chat_id)
+        
+    # Распаковываем данные из SQLite в переменные
+    ship_name, credits, fuel, coal, ore, steel = data
+    
+    # Считаем вес груза (уголь=10кг, руда=20кг, сталь=50кг)
+    current_weight = int((coal * 10) + (ore * 20) + (steel * 50))
     
     status_text = (
-        f"🛸 **Дирижабль:** {ship['name']}\n"
-        f"⚙️ **Статус:** {'В полете 🌤️' if ship['status'] == 'in_flight' else 'В порту ⚓'}\n"
-        f"📍 **Координаты:** X: {ship['x']:.1f}, Y: {ship['y']:.1f}\n"
-        f"⛽ **Топливо:** {ship['fuel']:.1f} / {ship['max_fuel']:.1f} л.\n"
-        f"💰 **Капитал:** {ship['credits']} кредитов\n"
-        f"📦 **Трюм ({current_weight} / {ship['max_cargo_weight']} кг):**\n"
-        f" ├ Уголь: {ship['cargo']['coal']} ед.\n"
-        f" ├ Железная руда: {ship['cargo']['iron_ore']} ед.\n"
-        f" ├ Сталь: {ship['cargo']['steel']} ед.\n"
-        f" └ Инструменты: {ship['cargo']['tools']} е단.\n"
+        f"🛸 **Дирижабль:** {ship_name}\n"
+        f"⚙️ **Статус:** В порту ⚓\n"
+        f"📍 **Координаты:** X: 0.0, Y: 0.0\n"
+        f"⛽ **Топливо:** {fuel:.1f} / 100.0 л.\n"
+        f"💰 **Капитал:** {credits:.1f} кредитов\n"
+        f"📦 **Трюм ({current_weight} / 500 кг):**\n"
+        f" ├ Уголь: {coal:.0f} ед.\n"
+        f" ├ Железная руда: {ore:.0f} ед.\n"
+        f" ├ Сталь: {steel:.0f} ед.\n"
+        f" └ Инструменты: 0 ед.\n"
     )
     
-    if ship["status"] == "in_flight":
-        dist = GameCore.calculate_distance(ship["x"], ship["y"], ship["target_x"], ship["target_y"])
-        status_text += f"\n🎯 **Цель:** X: {ship['target_x']}, Y: {ship['target_y']}\n"
-        status_text += f"📏 **Осталось лететь:** {dist:.1f} метров."
-        
     bot.send_message(chat_id, status_text, parse_mode="Markdown")
+
 
 # Обработчик кнопки "📖 Бортовой журнал" (Биржа города)
 @bot.message_handler(func=lambda message: message.text == "📖 Бортовой журнал")
@@ -254,26 +249,4 @@ def start_flight(message):
 
 if __name__ == '__main__':
     bot.polling(none_stop=True)
-# Обработчик команды /status для вывода профиля цеппелина на экран телефона
-@bot.message_handler(commands=['status'])
-def status_command(message):
-    chat_id = message.chat.id
-    data = get_player_status(chat_id) # Запрашиваем данные из файла SQLite
-    
-    if data:
-        # Распаковываем строки из базы в переменные
-        ship_name, credits, fuel, coal, ore, steel = data
-        
-        # Формируем красивый текст
-        text = (
-            f"🛸 Корабль: *{ship_name}*\n"
-            f"💰 Баланс: {credits:.1f} кр.\n"
-            f"⛽ Топливо: {fuel:.1f}/100 л.\n"
-            f"📦 Трюм:\n"
-            f" 🪵 Уголь: {coal:.1f} т.\n"
-            f" 🪨 Руда: {ore:.1f} т.\n"
-            f" 🪙 Сталь: {steel:.1f} т."
-        )
-        bot.send_message(chat_id, text, parse_mode="Markdown")
-    else:
-        bot.send_message(chat_id, "❌ Бортовой компьютер не найден. Напишите /start для регистрации!")
+
