@@ -169,9 +169,6 @@ def port_market_info(message):
 
     bot.send_message(chat_id, market_text, parse_mode="Markdown")
 
-@bot.message_handler(func=lambda message: message.text == "👥 Экипаж")
-def crew_placeholder(message):
-    bot.send_message(message.chat.id, "👥 Модуль экипажа находится в разработке.")
 
 # Покупка товара в городе (/buy coal 5)
 @bot.message_handler(commands=['buy'])
