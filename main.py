@@ -15,6 +15,14 @@ threading.Thread(target=run_fake_server, daemon=True).start()
 
 import telebot
 import os
+# Подключаем наши новые модули соционического экипажа
+from crew_manifest import CrewManager
+from crew_viewer import CrewViewer
+from dialogues import DialogueManager
+
+# Инициализируем менеджеры (они будут жить в оперативной памяти)
+crew_manager = CrewManager()
+dialogue_manager = DialogueManager(crew_manager)
 
 # Подключаем функции нашей базы данных SQLite
 from database import init_db, register_player, get_player_status
@@ -33,11 +41,24 @@ bot = telebot.TeleBot(BOT_TOKEN)
 
 # Фоновый игровой цикл (сердце сервера)
 def game_loop():
-    while True:
-        time.sleep(3) # 1 тик = 3 секунды реальности
+        while True:
+        time.sleep(3) # 1 тик = 3 секунды реального времени
         
-        # Пассивная добыча угля и плавка стали в городах
+        # Запускаем цикл, который проверяет абсолютно каждый активный корабль на сервере
+        for current_chat_id, ship_data in USER_SHIPS.items():
+            # Проверяем, летит ли конкретно этот дирижабль прямо сейчас
+            is_in_flight = False
+            if ship_data.get("status") == "in_flight":
+                is_in_flight = True
+                
+            # Передаем статус полёта в менеджер экипажа.
+            # Для MVP у нас один общий менеджер, но этот цикл обеспечит 
+            # правильный расчет тиков для всех, кто запустил команду полёта.
+            crew_manager.update_tick(is_in_flight)
+        
+        # Пассивная добыча угля и плавка стали (твой старый код для всего мира)
         GameCore.update_world_production()
+
         
         # Движение кораблей всех активных игроков
         for chat_id in list(USER_SHIPS.keys()):
@@ -250,3 +271,72 @@ def start_flight(message):
 if __name__ == '__main__':
     bot.polling(none_stop=True)
 
+# Обработчик кнопки "👥 Экипаж" (Главное меню управления командой)
+@bot.message_handler(func=lambda message: message.text == "👥 Экипаж")
+def crew_main_menu(message):
+    chat_id = message.chat.id
+    
+    # Создаем новые кнопки, которые появятся вместо основного меню
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    btn_status = types.KeyboardButton("📊 Состояние команды")
+    btn_radio = types.KeyboardButton("🎙 Радиосвязь")
+    btn_back = types.KeyboardButton("🔙 Главное меню")
+    markup.add(btn_status, btn_radio, btn_back)
+    
+    menu_text = (
+        "🛸 **ОТСЕК ЭКИПАЖА ДИРИЖАБЛЯ**\n"
+        "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+        "Вы подключились к узлу связи корабля. Выберите действие:\n\n"
+        "📊 `Состояние команды` — Инспекция здоровья, стресса и черт характера.\n"
+        "🎙 `Радиосвязь` — Прослушивание внутренней частоты переговоров офицеров."
+    )
+    bot.send_message(chat_id, menu_text, reply_markup=markup, parse_mode="Markdown")
+
+
+# Обработчик под-кнопки "📊 Состояние команды"
+@bot.message_handler(func=lambda message: message.text == "📊 Состояние команды")
+def crew_status_view(message):
+    chat_id = message.chat.id
+    # Берем красивый текстовый шаблон мостика из crew_viewer
+    status_text = CrewViewer.get_bridge_menu(crew_manager)
+    bot.send_message(chat_id, status_text, parse_mode="Markdown")
+
+
+# Обработчик под-кнопки "🎙 Радиосвязь"
+@bot.message_handler(func=lambda message: message.text == "🎙 Радиосвязь")
+def crew_radio_view(message):
+    chat_id = message.chat.id
+    
+    # Проверяем, летит ли корабль
+    is_in_flight = False
+    if chat_id in USER_SHIPS and USER_SHIPS[chat_id].get("status") == "in_flight":
+        is_in_flight = True
+        
+    if is_in_flight:
+        # Если летит — вытаскиваем сюжетную реплику по уровню стресса
+        log_text = dialogue_manager.get_flight_log()
+        if not log_text:
+            log_text = "🎙 _На частоте временное затишье. Офицеры заняты пилотированием._"
+    else:
+        # If в порту — выдаем случайную редкую фоновую фразу
+        # Передаем условный тик 100, чтобы обойти ограничение спама для ручного нажатия
+        log_text = dialogue_manager.get_dock_log(current_tick=100)
+        if not log_text:
+            log_text = "🎙 _Экипаж отдыхает в кают-компании порта._"
+            
+    bot.send_message(chat_id, log_text, parse_mode="Markdown")
+
+
+# Обработчик кнопки возврата "🔙 Главное меню"
+@bot.message_handler(func=lambda message: message.text == "🔙 Главное меню")
+def back_to_main_menu(message):
+    chat_id = message.chat.id
+    
+    # Возвращаем три твои стандартные кнопки нижнего меню
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    btn_status = types.KeyboardButton("📊 Статус дирижабля")
+    btn_crew = types.KeyboardButton("👥 Экипаж")
+    btn_journal = types.KeyboardButton("📖 Бортовой журнал")
+    markup.add(btn_status, btn_crew, btn_journal)
+    
+    bot.send_message(chat_id, "Вы вернулись в главное управление флотом.", reply_markup=markup, parse_mode="Markdown")
