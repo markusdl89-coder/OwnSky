@@ -78,6 +78,8 @@ def start_command(message):
     btn_journal = types.KeyboardButton("📖 Бортовой журнал")
     markup.add(btn_status, btn_crew, btn_journal)
     
+    # === НА БУДУЩЕЕ: ЗДЕСЬ БУДЕТ ВСТАВКА ВИДЕОРОЛИКА-ТРЕЙЛЕРА ЛОРА ИГРЫ ===
+    
     bot.send_message(
         chat_id, 
         "Приветствую, Адмирал! Ваш стартовый дирижабль пришвартован в Горне.\n\n📜 **Команды торговли:**\n• Цены в порту: кнопка `📖 Бортовой журнал`\n• Купить груз: `/buy [название] [количество]`\n• Продать груз: `/sell [название] [количество]`\n• Взлет в Пар-Сити: `/fly 400 500`", 
@@ -95,8 +97,8 @@ def start_flight(message):
         
     try:
         parts = message.text.split()
-        target_x = float(parts)
-        target_y = float(parts)
+        target_x = float(parts[1])
+        target_y = float(parts[2])
         
         ship["target_x"] = target_x
         ship["target_y"] = target_y
@@ -116,8 +118,8 @@ def buy_resource(message):
 
     try:
         parts = message.text.split()
-        resource = parts
-        quantity = int(parts)
+        resource = parts[1]
+        quantity = int(parts[2])
         city = CITIES[ship["current_city_id"]]
         
         if resource not in city["stockpile"] or city["prices"].get(resource, 0) == 0:
@@ -155,8 +157,8 @@ def sell_resource(message):
 
     try:
         parts = message.text.split()
-        resource = parts
-        quantity = int(parts)
+        resource = parts[1]
+        quantity = int(parts[2])
         city = CITIES[ship["current_city_id"]]
         
         if ship["cargo"].get(resource, 0) < quantity:
@@ -311,7 +313,7 @@ def view_camp_main(message):
 @bot.callback_query_handler(func=lambda call: call.data.startswith("dossier_"))
 def view_officer_dossier(call):
     action_data = call.data.split("_")
-    sociotype = action_data
+    sociotype = action_data[1]  # Исправлено: берем точный тип из ['dossier', 'EIE']
     officer = None
     for member in crew_manager.officers:
         if member.sociotype == sociotype:
@@ -328,7 +330,7 @@ def view_officer_dossier(call):
 def process_combat_turn(call):
     chat_id = call.message.chat.id
     action_data = call.data.split("_")
-    turn = int(action_data)
+    turn = int(action_data[2])  # Исправлено: берем точную цифру из ['combat', 'turn', '1']
     
     combat_sim.next_turn()
     crew_manager.update_tick(is_in_flight=True)
@@ -367,8 +369,8 @@ def get_camp_telegram_view():
 def process_camp_actions(call):
     chat_id = call.message.chat.id
     action_data = call.data.split("_")
-    category = action_data
-    value = action_data
+    category = action_data[1]  # Исправлено: берем точную категорию (action, path, time)
+    value = action_data[2]     # Исправлено: берем точное значение (add, remove, surface, tick...)
     
     if category == "action":
         if value == "add":
