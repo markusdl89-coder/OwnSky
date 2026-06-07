@@ -4,15 +4,32 @@ import threading
 import time
 import os
 
+# Создаем правильный обработчик, который всегда отвечает "ОК" на проверки Render
+class RenderHealthCheckHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Bot is alive and flying!")
+
+    # Глушим логи запросов в консоли, чтобы они не засоряли вам историю деплоя
+    def log_message(self, format, *args):
+        return
+
 def run_fake_server():
-    server_address = ('', 10000)
-    handler = http.server.SimpleHTTPRequestHandler
-    httpd = http.server.HTTPServer(server_address, handler)
+    # Читаем порт, который выдал Render. Если его нет (тест локально), берем 8080
+    port = int(os.environ.get("PORT", 8080))
+    server_address = ('0.0.0.0', port)
+    
+    httpd = http.server.HTTPServer(server_address, RenderHealthCheckHandler)
+    print(f" Навигационный маяк (заглушка) успешно запущен на порту {port}")
     httpd.serve_forever()
 
 threading.Thread(target=run_fake_server, daemon=True).start()
 
 # === СЛОЙ 2: ИГРОВЫЕ ИМПОРТЫ И ИНИЦИАЛИЗАЦИЯ МЕНЕДЖЕРОВ ===
+# ... далее ваш код идет без изменений ...
+
 import telebot
 from telebot import types
 
