@@ -25,7 +25,7 @@ def run_fake_server():
     print(f" Навигационный маяк (заглушка) успешно запущен на порту {port}")
     httpd.serve_forever()
 
-threading.Thread(target=run_fake_server, daemon=True).start()
+
 
 # === СЛОЙ 2: ИГРОВЫЕ ИМПОРТЫ И ИНИЦИАЛИЗАЦИЯ МЕНЕДЖЕРОВ ===
 # ... далее ваш код идет без изменений ...
@@ -412,5 +412,10 @@ def process_camp_actions(call):
         pass
 
 # === СЛОЙ 8: ЕДИНАЯ ТОЧКА ЗАПУСКА БОТА ===
+
 if __name__ == '__main__':
+    # 1. Сначала запускаем фоновый сервер-заглушку для Render
+    threading.Thread(target=run_fake_server, daemon=True).start()
+    
+    # 2. Затем запускаем самого Telegram-бота
     bot.polling(none_stop=True)
