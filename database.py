@@ -1,12 +1,23 @@
-import psycopg2
-from psycopg2.extras import DictCursor
+import pg8000
 
 # Ваш вечный ключ подключения к Neon PostgreSQL
 DATABASE_URL = "postgresql://neondb_owner:npg_6mhMOVdk8jLn@ep-fragrant-morning-a2a6oftt.eu-central-1.aws.neon.tech/neondb?sslmode=require"
 
 def get_connection():
-    """Создает подключение к базе данных"""
-    return psycopg2.connect(DATABASE_URL)
+    """Создает подключение к базе данных через pg8000"""
+    # Разбираем строку подключения на удобные параметры для pg8000
+    # Формат: postgresql://user:password@host/database
+    clean_url = DATABASE_URL.replace("postgresql://", "").replace("?sslmode=require", "")
+    user_pass, host_db = clean_url.split("@")
+    user, password = user_pass.split(":")
+    host, database = host_db.split("/")
+    
+    return pg8000.connect(
+        user=user,
+        password=password,
+        host=host,
+        database=database
+    )
 
 def init_db():
     """Создает универсальные таблицы, которые сами подстроятся под любые ресурсы"""
@@ -37,20 +48,20 @@ def init_db():
             name TEXT UNIQUE,
             x INT,
             y INT,
-            type TEXT, -- 'city' или 'camp'
-            owner_id BIGINT DEFAULT 0 -- 0 для городов, user_id для лагерей
+            type TEXT, 
+            owner_id BIGINT DEFAULT 0 
         )
     ''')
     
-    # 3. УНИВЕРСАЛЬНАЯ ТАБЛИЦА СКЛАДОВ (Сюда автоматически полезут любые ресурсы!)
+    # 3. УНИВЕРСАЛЬНАЯ ТАБЛИЦА СКЛАДОВ
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS inventories (
             id SERIAL PRIMARY KEY,
-            owner_type TEXT,     -- 'player' (трюм), 'location' (город/лагерь)
-            owner_id BIGINT,     -- user_id игрока ИЛИ id локации
-            item_name TEXT,      -- название ресурса (уголь, сталь, шестеренка...)
+            owner_type TEXT,     
+            owner_id BIGINT,     
+            item_name TEXT,      
             quantity INT DEFAULT 0,
-            price INT DEFAULT 0, -- актуально для магазинов в городах
+            price INT DEFAULT 0, 
             UNIQUE(owner_type, owner_id, item_name)
         )
     ''')
@@ -90,14 +101,21 @@ def register_player(user_id, username):
     conn.close()
 
 def get_player_data(user_id):
-    """Получает базовые данные игрока"""
+    """Получает базовые данные игрока в виде словаря"""
     conn = get_connection()
-    cursor = conn.cursor(cursor_factory=DictCursor)
-    cursor.execute("SELECT * FROM players WHERE user_id = %s", (user_id,))
-    player = cursor.fetchone()
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id, username, credits, ship_type, x, y, status, target_x, target_y, arrival_time, fuel FROM players WHERE user_id = %s", (user_id,))
+    row = cursor.fetchone()
     cursor.close()
     conn.close()
-    return dict(player) if player else None
+    
+    if row:
+        return {
+            'user_id': row[0], 'username': row[1], 'credits': row[2], 
+            'ship_type': row[3], 'x': row[4], 'y': row[5], 'status': row[6],
+            'target_x': row[7], 'target_y': row[8], 'arrival_time': row[9], 'fuel': row[10]
+        }
+    return None
 
 def get_player_inventory(user_id):
     """АВТОМАТИЧЕСКИ собирает всё, что лежит в трюме игрока"""
@@ -107,17 +125,13 @@ def get_player_inventory(user_id):
     items = cursor.fetchall()
     cursor.close()
     conn.close()
-    return {item[0]: item[1] for item in items}
+    return {row[0]: row[1] for row in items}
 
 def update_inventory(owner_type, owner_id, item_name, change_quantity, set_price=None):
-    """
-    Универсальная функция: добавляет или отнимает любой ресурс у кого угодно.
-    change_quantity может быть как положительным (+5 угля), так и отрицательным (-2 стали).
-    """
+    """Универсальная функция: добавляет или отнимает любой ресурс у кого угодно"""
     conn = get_connection()
     cursor = conn.cursor()
     
-    # Проверяем, есть ли уже такая запись на складе
     cursor.execute('''
         SELECT quantity FROM inventories 
         WHERE owner_type = %s AND owner_id = %s AND item_name = %s
@@ -125,7 +139,6 @@ def update_inventory(owner_type, owner_id, item_name, change_quantity, set_price
     row = cursor.fetchone()
     
     if row is None:
-        # Если такого ресурса еще не было на этом складе — создаем строку
         new_qty = max(0, change_quantity)
         price = set_price if set_price is not None else 0
         cursor.execute('''
@@ -133,7 +146,6 @@ def update_inventory(owner_type, owner_id, item_name, change_quantity, set_price
             VALUES (%s, %s, %s, %s, %s)
         ''', (owner_type, owner_id, item_name, new_qty, price))
     else:
-        # Если ресурс уже был — обновляем количество
         new_qty = max(0, row[0] + change_quantity)
         if set_price is not None:
             cursor.execute('''
