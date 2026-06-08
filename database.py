@@ -161,3 +161,9 @@ def update_inventory(owner_type, owner_id, item_name, change_quantity, set_price
     conn.commit()
     cursor.close()
     conn.close()
+def get_player_status(user_id):
+    """Возвращает текущий статус игрока (например, 'В порту' или 'В полете')"""
+    data = get_player_data(user_id)
+    if data:
+        return data.get('status', 'В порту')
+    return 'В порту'
