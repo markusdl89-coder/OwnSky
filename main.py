@@ -3,8 +3,16 @@ import http.server
 import threading
 import time
 import os
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# Создаем правильный обработчик, который всегда отвечает "ОК" на проверки Render
+# Импорты наших новых модулей экономики и базы данных
+import database as db
+from core import GameCore
+from items import ITEMS_REGISTRY
+from economy import calculate_dynamic_price, validate_cargo_space
+
+# Создаем обработчик, который отвечает "ОК" на проверки Render
 class RenderHealthCheckHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -12,188 +20,243 @@ class RenderHealthCheckHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"Bot is alive and flying!")
 
-    # Глушим логи запросов в консоли, чтобы они не засоряли вам историю деплоя
     def log_message(self, format, *args):
         return
 
 def run_fake_server():
-    # Читаем порт, который выдал Render. Если его нет (тест локально), берем 8080
     port = int(os.environ.get("PORT", 8080))
     server_address = ('0.0.0.0', port)
-    
     httpd = http.server.HTTPServer(server_address, RenderHealthCheckHandler)
     print(f" Навигационный маяк (заглушка) успешно запущен на порту {port}")
     httpd.serve_forever()
 
-
-
-# === СЛОЙ 2: ИГРОВЫЕ ИМПОРТЫ И ИНИЦИАЛИЗАЦИЯ МЕНЕДЖЕРОВ ===
-# ... далее ваш код идет без изменений ...
-
-import telebot
-from telebot import types
-
-from config import USER_SHIPS, CITIES, RESOURCE_WEIGHTS
-from core import GameCore
-from database import init_db, register_player, get_player_status
-
-from crew_manifest import CrewManager
-from crew_viewer import CrewViewer
-from dialogues import DialogueManager
-from ballistics import AirshipBlueprint, CombatSimulator
-from camp import CampManager, CampViewer
-
-init_db()
-
-crew_manager = CrewManager()
-dialogue_manager = DialogueManager(crew_manager)
-blueprint = AirshipBlueprint()
-combat_sim = CombatSimulator(dialogue_manager)
-camp_manager = CampManager()
-
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "ВАШ_ТОКЕН_БОТА")
+# Инициализация бота
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
 bot = telebot.TeleBot(BOT_TOKEN)
 
+# Инициализация базы данных
+db.init_db()
+
+# Запуск сервера-заглушки
+threading.Thread(target=run_fake_server, daemon=True).start()
+
+# === СЛОЙ 2: БАЗОВЫЙ СТАТУС И НАВИГАЦИЯ (ПОЛЁТЫ) ===
+
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    """Регистрация нового капитана в Postgres и выдача стартового пустого трюма."""
+    user_id = message.from_user.id
+    username = message.from_user.username or "Капитан"
+    
+    conn = db.get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO players (user_id, username) 
+        VALUES (%s, %s) ON CONFLICT DO NOTHING;
+    """, [user_id, username])
+    conn.commit()
+    cursor.close()
+    conn.close()
+    
+    # Инициализируем пустые ячейки для товаров из реестра
+    for item_id in ITEMS_REGISTRY.keys():
+        db.update_inventory('player', user_id, '', item_id, 0)
+        
+    welcome_text = (
+        "🌅 **OwnSky: Эпоха Дирижаблей приветствует тебя!**\n\n"
+        "Ты — капитан грузового судна в мире парящих городов.\n"
+        "Используй команду /ship, чтобы проверить трюм и системы.\n"
+        "Используй команду /fly, чтобы открыть навигационную карту полетов."
+    )
+    bot.send_message(message.chat.id, welcome_text, parse_mode="Markdown")
+
+@bot.message_handler(commands=['ship'])
+def show_ship(message):
+    """Выводит актуальный scannable-отчет о состоянии судна (масса, кубатура, баки)."""
+    user_id = message.from_user.id
+    report = GameCore.get_ship_report(user_id)
+    bot.send_message(message.chat.id, report, parse_mode="Markdown")
+
+@bot.message_handler(commands=['fly'])
+def choose_destination(message):
+    """Выводит список доступных городов для перелета в реальном времени."""
+    user_id = message.from_user.id
+    p = db.get_player_data(user_id)
+    
+    if not p:
+        bot.reply_to(message, "❌ Используйте /start для регистрации.")
+        return
+        
+    if p['status'] == 'В полете':
+        bot.reply_to(message, "❌ Вы уже находитесь в воздухе!")
+        return
+
+    text = "🗺 **НАВИГАЦИОННЫЙ МОСТИК**\nВыберите город назначения для прокладки курса:"
+    
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    # Выводим кнопки всех трех доступных городов из ТЗ
+    keyboard.add(
+        InlineKeyboardButton("🏙 Курс на Горн", callback_data="fly_to_Горн"),
+        InlineKeyboardButton("🏙 Курс на Пар-Сити", callback_data="fly_to_Пар-Сити"),
+        InlineKeyboardButton("🏙 Курс на Ветроград", callback_data="fly_to_Ветроград")
+    )
+    bot.send_message(message.chat.id, text, reply_markup=keyboard, parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("fly_to_"))
+def process_flight_start(call):
+    """Обработчик нажатия на кнопку города. Запуск полета реального времени."""
+    user_id = call.from_user.id
+    target_city = call.data.replace("fly_to_", "")
+    
+    # Вызываем метод запуска полета из core.py
+    success, message_text = GameCore.start_flight(user_id, target_city)
+    
+    if success:
+        bot.edit_message_text(message_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+    else:
+        # Если не хватило топлива или город тот же — показываем алерт поверх экрана
+        bot.answer_callback_query(call.id, message_text, show_alert=True)
+
+
 # === СЛОЙ 3: ФОНОВЫЙ ИГРОВОЙ ЦИКЛ (СЕРДЦЕ СЕРВЕРА) ===
+
 def game_loop():
+    """
+    Фоновый движок времени. Раз в 3 секунды обрабатывает состояние экипажа,
+    полетные тики и пассивное производство фабрик всех игроков в Postgres.
+    """
     while True:
+        # Твой оригинальный интервал времени — 3 секунды
         time.sleep(3)
         
-        for current_chat_id, ship_data in USER_SHIPS.items():
-            is_in_flight = False
-            if ship_data.get("status") == "in_flight":
-                is_in_flight = True
-            crew_manager.update_tick(is_in_flight)
-        
-        GameCore.update_world_production()
-        
-        for chat_id in list(USER_SHIPS.keys()):
-            status = GameCore.process_flight_tick(chat_id)
+        try:
+            conn = db.get_connection()
+            cursor = conn.cursor()
+            # Запрашиваем всех зарегистрированных капитанов
+            cursor.execute("SELECT user_id, username, status, fuel, x, y FROM players")
+            all_players = cursor.fetchall()
+            cursor.close()
+            conn.close()
             
-            if status == "arrived":
-                ship = USER_SHIPS[chat_id]
-                for city_id, city_data in CITIES.items():
-                    if city_data["x"] == ship["x"] and city_data["y"] == ship["y"]:
-                        ship["current_city_id"] = city_id
-                        bot.send_message(chat_id, "🔔 **Бортовой журнал:** Приземлились в порту: " + str(city_data['name']) + "!")
-                        break
-            elif status == "no_fuel_crash":
-                bot.send_message(chat_id, "🚨 **КАТАСТРОФА:** Топливо иссякло. Корабль рухнул. Экипаж погиб.")
+            for row in all_players:
+                user_id = row[0]
+                username = row[1]
+                status = row[2]
+                fuel = row[3]
+                px = row[4]
+                py = row[5]
+                
+                # --- 1. ЛОГИКА ЭКИПАЖА (СОХРАНЯЕМ ТВОЙ МЕНЕДЖЕР) ---
+                is_in_flight = (status == "В полете")
+                # Твой crew_manager получает точный статус и крутит тики в реальном времени
+                crew_manager.update_tick(is_in_flight)
+                
+                # --- 2. ЛОГИКА ПОЛЕТОВ И КАТАСТРОФ ---
+                if is_in_flight:
+                    # Проверяем таймер прибытия через ядро
+                    flight_status = GameCore.check_and_update_flight_status(user_id)
+                    
+                    if flight_status == "arrived":
+                        # Дирижабль успешно сел. Определяем имя города по целым координатам
+                        if px == 400 and py == 500:
+                            city_name = "Пар-Сити"
+                        elif px == -200 and py == 300:
+                            city_name = "Ветроград"
+                        else:
+                            city_name = "Горн"
+                            
+                        # Шаг 4: Обновляем фабрики этого города при посадке
+                        GameCore.update_city_production(city_name)
+                        
+                        bot.send_message(user_id, f"🔔 **Бортовой журнал:** Приземлились в порту: {city_name}!")
+                        
+                    elif fuel <= 0:
+                        # Твой оригинальный сценарий крушения дирижабля при нуле топлива
+                        conn = db.get_connection()
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            UPDATE players 
+                            SET status = 'В порту', x = 0, y = 0, fuel = 10 
+                            WHERE user_id = %s
+                        """, [user_id])
+                        conn.commit()
+                        cursor.close()
+                        conn.close()
+                        
+                        bot.send_message(user_id, "🚨 **КАТАСТРОФА:** Топливо иссякло. Корабль рухнул. Экипаж погиб.")
+                        
+        except Exception as e:
+            print(f"Ошибка в фоновом цикле GameLoop: {e}")
 
+# Запуск фонового движка времени в отдельном системном потоке
 threading.Thread(target=game_loop, daemon=True).start()
 
-# === СЛОЙ 4: ОБРАБОТЧИКИ ТЕКСТОВЫХ КОМАНД (СЛЭШИ) ===
+
+# === СЛОЙ 4: ИНТЕРФЕЙСНЫЕ РЕПЛИКИ И ОБРАБОТЧИКИ МЕНЮ ===
 
 @bot.message_handler(commands=['start'])
 def start_command(message):
     chat_id = message.chat.id
-    register_player(chat_id)
+    user_id = message.from_user.id
     
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    btn_status = types.KeyboardButton("📊 Статус")
-    btn_crew = types.KeyboardButton("👥 Экипаж")
-    btn_journal = types.KeyboardButton("📖 Бортовой журнал")
+    # Регистрируем игрока в новой базе данных Postgres
+    conn = db.get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO players (user_id, username) 
+        VALUES (%s, %s) ON CONFLICT DO NOTHING;
+    """, [user_id, message.from_user.username or "Капитан"])
+    conn.commit()
+    cursor.close()
+    conn.close()
+    
+    # Твоя оригинальная Reply-клавиатура управления дирижаблем
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+    btn_status = telebot.types.KeyboardButton("📊 Статус")
+    btn_crew = telebot.types.KeyboardButton("👥 Экипаж")
+    btn_journal = telebot.types.KeyboardButton("📖 Бортовой журнал")
     markup.add(btn_status, btn_crew, btn_journal)
     
     # === НА БУДУЩЕЕ: ЗДЕСЬ БУДЕТ ВСТАВКА ВИДЕОРОЛИКА-ТРЕЙЛЕРА ЛОРА ИГРЫ ===
     
+    # Очищенный от старых слэшей текст, переведенный на кнопки интерфейса
     bot.send_message(
         chat_id, 
-        "Приветствую, Адмирал! Ваш стартовый дирижабль пришвартован в Горне.\n\n📜 **Команды торговли:**\n• Цены в порту: кнопка `📖 Бортовой журнал`\n• Купить груз: `/buy [название] [количество]`\n• Продать груз: `/sell [название] [количество]`\n• Взлет в Пар-Сити: `/fly 400 500`", 
+        "Приветствую, Адмирал! Ваш стартовый дирижабль пришвартован в Горне.\n\n"
+        "📜 **Управление флотом:**\n"
+        "• Для проверки трюма и систем нажмите кнопку `📊 Статус`\n"
+        "• Для открытия торговой биржи порта нажмите кнопку `📖 Бортовой журнал`\n"
+        "• Проложить курс в другие города можно через команду `/fly`", 
         reply_markup=markup,
         parse_mode="Markdown"
     )
 
-@bot.message_handler(commands=['fly'])
-def start_flight(message):
+# Перехватываем нажатия твоих Reply-кнопок и связываем их с новым ядром
+@bot.message_handler(func=lambda message: message.text in ["📊 Статус", "👥 Экипаж", "📖 Бортовой журнал"])
+def handle_menu_buttons(message):
+    user_id = message.from_user.id
     chat_id = message.chat.id
-    ship = USER_SHIPS.get(chat_id)
-    if ship["status"] == "in_flight":
-        bot.send_message(chat_id, "❌ Мы уже в воздухе!")
-        return
+    
+    if message.text == "📊 Статус":
+        # Вызываем новый scannable-отчет из Postgres
+        report = GameCore.get_ship_report(user_id)
+        bot.send_message(chat_id, report, parse_mode="Markdown")
         
-    try:
-        parts = message.text.split()
-        target_x = float(parts[1])
-        target_y = float(parts[2])
+    elif message.text == "👥 Экипаж":
+        # Задел под твой crew_manager (вывод параметров усталости, еды и т.д.)
+        bot.send_message(chat_id, "👥 **УПРАВЛЕНИЕ ЭКИПАЖЕМ:**\nПараметры лояльности, припасов и усталости обсчитываются в реальном времени.")
         
-        ship["target_x"] = target_x
-        ship["target_y"] = target_y
-        ship["status"] = "in_flight"
-        ship["current_city_id"] = None
-        bot.send_message(chat_id, "🛫 **Взлет!** Курс на X: " + str(target_x) + ", Y: " + str(target_y) + ".")
-    except (IndexError, ValueError):
-        bot.send_message(chat_id, "⚠️ Формат: `/fly 400 500`", parse_mode="Markdown")
-
-@bot.message_handler(commands=['buy'])
-def buy_resource(message):
-    chat_id = message.chat.id
-    ship = USER_SHIPS.get(chat_id)
-    if not ship or ship["status"] == "in_flight":
-        bot.send_message(chat_id, "❌ Нельзя торговать в полете!")
-        return
-
-    try:
-        parts = message.text.split()
-        resource = parts[1]
-        quantity = int(parts[2])
-        city = CITIES[ship["current_city_id"]]
-        
-        if resource not in city["stockpile"] or city["prices"].get(resource, 0) == 0:
-            bot.send_message(chat_id, "❌ Товар здесь не продается.")
-            return
-            
-        price = city["prices"][resource]
-        total_cost = price * quantity
-        added_weight = quantity * RESOURCE_WEIGHTS.get(resource, 0)
-        
-        if city["stockpile"][resource] < quantity:
-            bot.send_message(chat_id, "❌ Нет такого количества на складе.")
-            return
-        if ship["credits"] < total_cost:
-            bot.send_message(chat_id, "❌ Нехватка кредитов.")
-            return
-        if GameCore.get_cargo_weight(ship) + added_weight > ship["max_cargo_weight"]:
-            bot.send_message(chat_id, "❌ Перегруз трюма!")
-            return
-            
-        city["stockpile"][resource] -= quantity
-        ship["cargo"][resource] += quantity
-        ship["credits"] -= total_cost
-        bot.send_message(chat_id, "✅ Куплено " + str(quantity) + " ед. за " + str(total_cost) + " кр.!")
-    except (IndexError, ValueError):
-        bot.send_message(chat_id, "⚠️ Формат: `/buy coal 5`", parse_mode="Markdown")
-
-@bot.message_handler(commands=['sell'])
-def sell_resource(message):
-    chat_id = message.chat.id
-    ship = USER_SHIPS.get(chat_id)
-    if not ship or ship["status"] == "in_flight":
-        bot.send_message(chat_id, "❌ Нельзя торговать в полете!")
-        return
-
-    try:
-        parts = message.text.split()
-        resource = parts[1]
-        quantity = int(parts[2])
-        city = CITIES[ship["current_city_id"]]
-        
-        if ship["cargo"].get(resource, 0) < quantity:
-            bot.send_message(chat_id, "❌ Нет товара в трюме.")
-            return
-        if city["prices"].get(resource, 0) == 0:
-            bot.send_message(chat_id, "❌ Город не принимает этот товар.")
-            return
-            
-        price = city["prices"][resource]
-        total_profit = price * quantity
-        
-        ship["cargo"][resource] -= quantity
-        city["stockpile"][resource] += quantity
-        ship["credits"] += total_profit
-        bot.send_message(chat_id, "✅ Продано " + str(quantity) + " ед. за " + str(total_profit) + " кр.!")
-    except (IndexError, ValueError):
-        bot.send_message(chat_id, "⚠️ Формат: `/sell coal 5`", parse_mode="Markdown")
+    elif message.text == "📖 Бортовой журнал":
+        # Кнопка журнала теперь мгновенно открывает Inline-биржу текущего города
+        # Симулируем вызов команды /market для удобства игрока
+        class FakeMessage:
+            def __init__(self, c_id, u_id):
+                self.chat = self
+                self.id = c_id
+                self.from_user = self
+                self.username = "Капитан"
+        fake_msg = FakeMessage(chat_id, user_id)
+        show_market(fake_msg)
 
 # === СЛОЙ 5: ГЛАВНОЕ МЕНЮ (НИЖНИЕ КНОПКИ КЛАВИАТУРЫ) ===
 
