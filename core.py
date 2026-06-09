@@ -1,86 +1,152 @@
 import math
-from config import USER_SHIPS, START_PORT, CITIES, RESOURCE_WEIGHTS
+import time
+from typing import Dict, Any, Tuple
+import database as db
+from economy import calculate_cargo_metrics
 
 class GameCore:
+    
     @staticmethod
-    def init_ship(chat_id, name="Стартовый Цеппелин"):
-        """Создание корабля с кошельком и пустым трюмом"""
-        USER_SHIPS[chat_id] = {
-            "name": name,
-            "status": "docked",
-            "current_city_id": "gorn", # Изначально стоим в Горне
-            "x": START_PORT["x"],
-            "y": START_PORT["y"],
-            "target_x": None,
-            "target_y": None,
-            "fuel": 100.0,
-            "max_fuel": 100.0,
-            "speed": 15.0,
-            "fuel_consumption": 0.5,
-            "credits": 1000,           # Стартовый капитал Адмирала
-            "max_cargo_weight": 500,   # Лимит грузоподъемности (500 кг)
-            "cargo": {"coal": 0, "iron_ore": 0, "steel": 0, "tools": 0} # Пустой трюм
-        }
-
-    @staticmethod
-    def calculate_distance(x1, y1, x2, y2):
-        return math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
-
-    @staticmethod
-    def get_cargo_weight(ship):
-        """Вычисление общего веса груза в трюме"""
-        total_weight = 0
-        for resource, amount in ship["cargo"].items():
-            total_weight += amount * RESOURCE_WEIGHTS.get(resource, 0)
-        return total_weight
-
-    @classmethod
-    def update_world_production(cls):
-        """Пассивное производство в городах. Вызывается каждый тик игры"""
-        # 1. Шахта в Горне добывает ресурсы
-        gorn = CITIES["gorn"]
-        gorn["stockpile"]["coal"] += int(2 * gorn["production_speed"])
-        gorn["stockpile"]["iron_ore"] += int(1 * gorn["production_speed"])
-
-        # 2. Завод в Пар-Сити плавит сталь из угля и руды
-        pc = CITIES["steam_city"]
-        # Для 1 стали нужно 2 угля и 2 руды
-        if pc["stockpile"]["coal"] >= 2 and pc["stockpile"]["iron_ore"] >= 2:
-            pc["stockpile"]["coal"] -= 2
-            pc["stockpile"]["iron_ore"] -= 2
-            pc["stockpile"]["steel"] += int(1 * pc["production_speed"])
-
-    @classmethod
-    def process_flight_tick(cls, chat_id):
-        ship = USER_SHIPS.get(chat_id)
-        if not ship or ship["status"] != "in_flight":
-            return "not_moving"
-
-        if ship["target_x"] is None or ship["target_y"] is None:
-            return "error"
-
-        distance = cls.calculate_distance(ship["x"], ship["y"], ship["target_x"], ship["target_y"])
-
-        if ship["fuel"] <= 0:
-            ship["status"] = "wrecked"
-            return "no_fuel_crash"
-
-        if distance <= ship["speed"]:
-            ship["x"] = ship["target_x"]
-            ship["y"] = ship["target_y"]
-            ship["status"] = "docked"
-            ship["target_x"] = None
-            ship["target_y"] = None
-            return "arrived"
-
-        dx = ship["target_x"] - ship["x"]
-        dy = ship["target_y"] - ship["y"]
-        ratio = ship["speed"] / distance
+    def get_ship_report(user_id: int) -> str:
+        """
+        Формирует полный текстовый отчет о состоянии дирижабля для Telegram.
+        Выводит массу и объем трюма на лету, убирая пустые ресурсы.
+        """
+        p = db.get_player_data(user_id)
+        if not p:
+            return "❌ Капитан не найден. Используйте /start для регистрации."
+            
+        # Запрашиваем из универсальной таблицы текущие грузы игрока
+        cargo = db.get_player_cargo_dict(user_id)
+        current_weight, current_volume = calculate_cargo_metrics(cargo)
         
-        ship["x"] += dx * ratio
-        ship["y"] += dy * ratio
+        # Считаем статус и время полета
+        current_time = int(time.time())
+        if p['status'] == 'В полете':
+            arrival = p.get('arrival_time')
+            if arrival and current_time < arrival:
+                remaining = int(arrival - current_time)
+                # Красивое отображение минут и секунд без дробей
+                minutes = remaining // 60
+                seconds = remaining % 60
+                status_text = f"✈ В полете (Осталось: {minutes}м {seconds}с)"
+            else:
+                status_text = "✈ Завершает маневр посадки..."
+        else:
+            status_text = "⚓ В порту"
+            
+        # Формируем scannable-интерфейс для экрана смартфона
+        report = (
+            f"🛸 **ДИРИЖАБЛЬ: {p['ship_type']}**\n"
+            f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+            f"💰 Кредиты: `{p['credits']}` 🪙\n"
+            f"⛽ Топливо: `{p['fuel']}/{p['max_fuel']}` Брл.\n"
+            f"📦 Масса трюма: `{current_weight}/{p['max_cargo']}` кг\n"
+            f"📐 Объем трюма: `{current_volume}/{p['max_volume']}` куб.м\n"
+            f"📍 Координаты: `[{p['x']}, {p['y']}]` \n"
+            f"📊 Статус: **{status_text}**\n"
+        )
+        return report
 
-        # Если корабль загружен, он тратит чуть больше топлива (эффект веса)
-        weight_factor = 1.0 + (cls.get_cargo_weight(ship) / ship["max_cargo_weight"]) * 0.5
-        ship["fuel"] = max(0.0, ship["fuel"] - (ship["fuel_consumption"] * weight_factor))
-        return "moving"
+    @staticmethod
+    def start_flight(user_id: int, target_city_name: str) -> Tuple[bool, str]:
+        """
+        Инициализирует полет до выбранного города.
+        Рассчитывает точную целую секунду прибытия в реальном времени.
+        """
+        p = db.get_player_data(user_id)
+        if not p: 
+            return False, "Вы не зарегистрированы."
+        if p['status'] == 'В полете': 
+            return False, "❌ Ваш дирижабль уже находится в воздухе!"
+            
+        # Ищем координаты города назначения в базе данных
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT x, y FROM locations WHERE name = %s;", [target_city_name])
+        city = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        
+        if not city:
+            return False, "🗺 Такой город не найден на полетных картах."
+            
+        tx, ty = city
+        
+        # Расстояние между текущей точкой дирижабля и целью
+        distance = math.hypot(tx - p['x'], ty - p['y'])
+        if distance == 0:
+            return False, "🏙 Вы уже находитесь в этом городе!"
+            
+        # ====================================================================
+        # === НАСТРОЙКА БАЛАНСА: СКОРОСТЬ И ВРЕМЯ ПОЛЕТА (РЕАЛЬНОЕ ВРЕМЯ) ===
+        # ====================================================================
+        # 1. Твоя будущая базовая скорость корабля (км в час или единиц в секунду):
+        ship_speed = 10 
+        
+        # 2. Формула реального времени: расстояние делим на скорость (в секундах)
+        # travel_time = int(distance / ship_speed) 
+        
+        # 3. ВРЕМЕННЫЙ ТЕСТОВЫЙ РЕЖИМ (сейчас любой полет длится ровно 10 секунд):
+        travel_time = 10 
+        # ====================================================================
+        
+        # Расход топлива (строго целое число, например, 5 бочек за перелет)
+        fuel_cost = 5
+        if p['fuel'] < fuel_cost:
+            return False, f"⛽ Недостаточно топлива! Для этого перелета нужно {fuel_cost} Брл."
+            
+        # Вычисляем точную целую секунду Unix, когда корабль должен прилететь
+        arrival_timestamp = int(time.time()) + travel_time
+        
+        # Записываем параметры полета в Postgres
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE players 
+            SET status = 'В полете', 
+                target_x = %s, 
+                target_y = %s, 
+                arrival_time = %s, 
+                fuel = fuel - %s 
+            WHERE user_id = %s;
+        """, [tx, ty, arrival_timestamp, fuel_cost, user_id])
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return True, f"🚀 Дирижабль отдал швартовы и взял курс на **{target_city_name}**! Время в пути: {travel_time} сек."
+
+    @staticmethod
+    def check_and_update_flight_status(user_id: int) -> str:
+        """
+        Проверяет, наступило ли время прилета.
+        Если время пришло — мгновенно переносит корабль в координаты города.
+        Возвращает: 'arrived' (прилетел), 'flying' (еще летит), 'idle' (был в порту).
+        """
+        p = db.get_player_data(user_id)
+        if not p or p['status'] != 'В полете':
+            return "idle"
+            
+        current_time = int(time.time())
+        arrival_timestamp = p.get('arrival_time')
+        
+        # Проверяем: текущее время компьютера уже больше или равно времени финиша?
+        if arrival_timestamp and current_time >= int(arrival_timestamp):
+            # Время пришло! Фиксируем прибытие корабля в координаты цели
+            conn = db.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE players 
+                SET x = target_x, 
+                    y = target_y, 
+                    status = 'В порту', 
+                    arrival_time = NULL 
+                WHERE user_id = %s;
+            """, [user_id])
+            conn.commit()
+            cursor.close()
+            conn.close()
+            return "arrived"
+            
+        return "flying"
