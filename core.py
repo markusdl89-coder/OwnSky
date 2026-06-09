@@ -2,15 +2,20 @@ import math
 import time
 from typing import Dict, Any, Tuple
 import database as db
-from economy import calculate_cargo_metrics
+from economy import calculate_cargo_metrics, calculate_dynamic_price
 
 class GameCore:
     
     @staticmethod
     def update_city_production(city_name: str):
+        """
+        Проверяет, сколько реального времени прошло с последнего тика фабрик города,
+        и доначисляет произведенные ресурсы на склад биржи.
+        """
         current_time = int(time.time())
         conn = db.get_connection()
         cursor = conn.cursor()
+        
         cursor.execute("SELECT last_tick FROM locations WHERE name = %s;", [city_name])
         row = cursor.fetchone()
         if not row:
@@ -54,6 +59,7 @@ class GameCore:
 
     @staticmethod
     def check_and_update_flight_status(user_id: int) -> str:
+        """Проверяет таймер прибытия и переводит корабль в статус порта."""
         p = db.get_player_data(user_id)
         if not p or p['status'] != 'В полете':
             return "idle"
@@ -81,6 +87,7 @@ class GameCore:
 
     @staticmethod
     def get_ship_report(user_id: int) -> str:
+        """Формирует полный текстовый отчет о состоянии дирижабля."""
         GameCore.check_and_update_flight_status(user_id)
         p = db.get_player_data(user_id)
         if not p:
@@ -116,6 +123,7 @@ class GameCore:
 
     @staticmethod
     def start_flight(user_id: int, target_city_name: str) -> Tuple[bool, str]:
+        """Инициализирует перелет реального времени."""
         p = db.get_player_data(user_id)
         if not p: 
             return False, "Вы не зарегистрированы."
@@ -132,7 +140,7 @@ class GameCore:
         if not city:
             return False, "🗺 Такой город не найден на полетных картах."
             
-        tx, ty = city
+        tx, ty = city[0], city[1]
         distance = math.hypot(tx - p['x'], ty - p['y'])
         if distance == 0:
             return False, "🏙 Вы уже находитесь в этом городе!"
@@ -140,7 +148,7 @@ class GameCore:
         # === НАСТРОЙКА БАЛАНСА ВРЕМЕНИ ПОЛЕТА ===
         # ship_speed = 10 
         # travel_time = int(distance / ship_speed) 
-        travel_time = 10  # Временный тест на 10 секунд
+        travel_time = 10  # Временный тест на 10 секунд для проверок
         # =======================================
         
         fuel_cost = 5
@@ -165,3 +173,26 @@ class GameCore:
         conn.close()
         
         return True, f"🚀 Дирижабль отдал швартовы и взял курс на **{target_city_name}**! Время в пути: {travel_time} сек."
+
+    @staticmethod
+    def get_market_data(city_name: str) -> Dict[str, Dict[str, Any]]:
+        """
+        Собирает данные рынка города для инлайн-кнопок.
+        Сразу обсчитывает пассивное производство фабрик.
+        """
+        GameCore.update_city_production(city_name)
+        
+        from items import ITEMS_REGISTRY
+        market_profile = {}
+        
+        for item_id in ITEMS_REGISTRY.keys():
+            stock, base_demand = db.get_city_storage_data(city_name, item_id)
+            prices = calculate_dynamic_price(item_id, stock, base_demand)
+            
+            market_profile[item_id] = {
+                "stock": stock,
+                "buy_price": prices["buy_price"],
+                "sell_price": prices["sell_price"],
+                "is_contraband": prices["is_contraband"]
+            }
+        return market_profile
