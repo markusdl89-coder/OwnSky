@@ -2,11 +2,27 @@ import os
 import pg8000
 import time
 from typing import Dict, Any, List, Tuple
+from urllib.parse import urlparse
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://user:pass@localhost:5432/ownsky")
 
 def get_connection():
-    return pg8000.connect(dsn=DATABASE_URL)
+    """Парсит DATABASE_URL и подключается к PostgreSQL через pg8000."""
+    try:
+        # Парсим URL
+        parsed = urlparse(DATABASE_URL)
+        
+        conn = pg8000.connect(
+            host=parsed.hostname or "localhost",
+            port=parsed.port or 5432,
+            user=parsed.username or "user",
+            password=parsed.password or "password",
+            database=parsed.path.lstrip('/') or "ownsky"
+        )
+        return conn
+    except Exception as e:
+        print(f"❌ Ошибка подключения к БД: {e}")
+        raise
 
 def init_db():
     conn = get_connection()
