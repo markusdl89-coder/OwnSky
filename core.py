@@ -1,198 +1,195 @@
-import math
 import time
-from typing import Dict, Any, Tuple
-import database as db
-from economy import calculate_cargo_metrics, calculate_dynamic_price
+import math
+from typing import Dict, Any, Optional
+# Мы используем заглушку базы данных, если реальный модуль db не импортирован.
+# В реальном коде убедись, что db настроен на работу с Neon.tech
+try:
+    import db
+except ImportError:
+    class MockDB:
+        @staticmethod
+        def get_player_data(user_id: int) -> Optional[Dict[str, Any]]:
+            return None
+        @staticmethod
+        def get_connection():
+            return None
+    db = MockDB()
+
+# Импортируем функции штурманского плана
+from navigation import process_flight_plan_action
 
 class GameCore:
+    """Центральный процессор игровых механик OwnSky."""
     
     @staticmethod
-    def update_city_production(city_name: str):
+    def calculate_distance(x1: int, y1: int, x2: int, y2: int) -> float:
+        """Вычисляет гипотенузу (расстояние) между двумя координатами."""
+        return math.hypot(x2 - x1, y2 - y1)
+
+    @staticmethod
+    def start_flight(user_id: int, target_location_name: str) -> str:
         """
-        Проверяет, сколько реального времени прошло с последнего тика фабрик города,
-        и доначисляет произведенные ресурсы на склад биржи.
+        Инициализирует полет корабля.
+        Вычисляет расстояние, списывает топливо, устанавливает статус 'В полете' 
+        и рассчитывает arrival_time (время прибытия).
         """
-        current_time = int(time.time())
+        p = db.get_player_data(user_id)
+        if not p:
+            return "Игрок не найден."
+            
+        if p.get('status') == 'В полете':
+            return "Корабль уже находится в небе!"
+
         conn = db.get_connection()
         cursor = conn.cursor()
         
-        cursor.execute("SELECT last_tick FROM locations WHERE name = %s;", [city_name])
-        row = cursor.fetchone()
-        if not row:
+        # Получаем координаты цели
+        cursor.execute("SELECT x, y FROM locations WHERE name = %s;", (target_location_name,))
+        loc = cursor.fetchone()
+        if not loc:
             cursor.close()
             conn.close()
-            return
-
-        last_tick = row[0]
-        time_passed = current_time - last_tick
-        tick_interval = 60 
-        accumulated_ticks = time_passed // tick_interval
+            return f"Локация '{target_location_name}' не найдена на карте."
+            
+        tx, ty = loc[0], loc[1]
         
-        if accumulated_ticks > 0:
-            if city_name == 'Горн':
-                production = {"steel": 2 * accumulated_ticks, "tools": 1 * accumulated_ticks, "coal": -1 * accumulated_ticks}
-            elif city_name == 'Пар-Сити':
-                production = {"fuel": 3 * accumulated_ticks, "steel": -1 * accumulated_ticks}
-            else:
-                production = {"coal": 2 * accumulated_ticks, "iron_ore": 2 * accumulated_ticks}
-                
-            for item_id, change_qty in production.items():
-                cursor.execute("""
-                    SELECT quantity FROM inventories 
-                    WHERE owner_type = 'city' AND owner_name = %s AND item_name = %s
-                """, (city_name, item_id))
-                inv_row = cursor.fetchone()
-                
-                if inv_row is not None:
-                    new_qty = max(0, inv_row[0] + change_qty)
-                    cursor.execute("""
-                        UPDATE inventories SET quantity = %s 
-                        WHERE owner_type = 'city' AND owner_name = %s AND item_name = %s
-                    """, (new_qty, city_name, item_id))
+        # Считаем дистанцию и расход топлива
+        distance = GameCore.calculate_distance(p['x'], p['y'], tx, ty)
+        fuel_cost = int(distance * 0.5)  # 1 единица топлива на 2 км пути
+        
+        if p['fuel'] < fuel_cost:
+            cursor.close()
+            conn.close()
+            return f"Недостаточно топлива для перелета. Требуется: {fuel_cost}, доступно: {p['fuel']}."
             
-            new_tick_time = last_tick + (accumulated_ticks * tick_interval)
-            cursor.execute("UPDATE locations SET last_tick = %s WHERE name = %s;", [new_tick_time, city_name])
-            conn.commit()
-            
+        # Настройка времени (скорость: 10 км за 1 реальную секунду для тестов)
+        speed = 10.0
+        flight_duration = max(int(distance / speed), 2)  # Минимум 2 секунды полета
+        arrival_time = int(time.time()) + flight_duration
+        
+        # Запись полета в БД
+        cursor.execute("""
+            UPDATE players 
+            SET status = 'В полете', 
+                target_x = %s, target_y = %s, 
+                arrival_time = %s, 
+                fuel = fuel - %s
+            WHERE user_id = %s;
+        """, (tx, ty, arrival_time, fuel_cost, user_id))
+        
+        conn.commit()
         cursor.close()
         conn.close()
+        
+        return f"Дирижабль поднялся в воздух и взял курс на {target_location_name}. Время в пути: {flight_duration} сек."
 
     @staticmethod
     def check_and_update_flight_status(user_id: int) -> str:
-        """Проверяет таймер прибытия и переводит корабль в статус порта."""
+        """Проверяет таймер прибытия, выполняет торговый приказ в порту и запускает следующую точку плана."""
         p = db.get_player_data(user_id)
-        if not p or p['status'] != 'В полете':
+        if not p:
             return "idle"
+
+        # СИТУАЦИЯ А: Корабль стоит на месте, проверяем, нет ли новых приказов в плане
+        if p['status'] != 'В полете':
+            conn = db.get_connection()
+            cursor = conn.cursor()
             
+            cursor.execute("""
+                SELECT id, target_x, target_y, action 
+                FROM flight_plans 
+                WHERE user_id = %s AND status = 'pending' 
+                ORDER BY queue_order ASC LIMIT 1;
+            """, [user_id])
+            next_point = cursor.fetchone()
+            
+            if next_point:
+                plan_id, tx, ty, action = next_point
+                
+                # Ищем имя города по координатам, чтобы скормить его в start_flight
+                cursor.execute("SELECT name FROM locations WHERE x = %s AND y = %s;", (tx, ty))
+                city_row = cursor.fetchone()
+                
+                if city_row:
+                    city_name = city_row[0]
+                    # Переводим точку полетного плана в статус активной
+                    cursor.execute("UPDATE flight_plans SET status = 'active' WHERE id = %s;", [plan_id])
+                    conn.commit()
+                    cursor.close()
+                    conn.close()
+                    
+                    # Отправляем дирижабль в путь
+                    GameCore.start_flight(user_id, city_name)
+                    return "flying"
+                    
+            if 'cursor' in locals() and not cursor.closed:
+                cursor.close()
+            if 'conn' in locals() and not conn.closed:
+                conn.close()
+            return "idle"
+
+        # СИТУАЦИЯ Б: Корабль летел, проверяем таймер приземления
         current_time = int(time.time())
         arrival_timestamp = p.get('arrival_time')
         
         if arrival_timestamp and current_time >= int(arrival_timestamp):
             conn = db.get_connection()
             cursor = conn.cursor()
+            
+            # 1. Достаем текущий активный приказ
             cursor.execute("""
-                UPDATE players 
-                SET x = target_x, 
-                    y = target_y, 
-                    status = 'В порту', 
-                    arrival_time = NULL 
+                SELECT id, action FROM flight_plans 
+                WHERE user_id = %s AND status = 'active';
+            """, [user_id])
+            active_row = cursor.fetchone()
+            
+            report_msg = ""
+            if active_row:
+                plan_id, action = active_row
+                # ВЫПОЛНЯЕМ ТОРГОВЫЙ ПРИКАЗ ПО НАШЕЙ ЭКОНОМИКЕ
+                report_msg = process_flight_plan_action(cursor, user_id, action)
+                
+                # Помечаем эту точку маршрута как выполненную
+                cursor.execute("UPDATE flight_plans SET status = 'completed' WHERE id = %s;", [plan_id])
+            
+            # 2. Обновляем статус игрока: перемещаем его в координаты города
+            cursor.execute("""
+                UPDATE players
+                SET x = target_x, y = target_y, status = 'В порту', arrival_time = NULL
                 WHERE user_id = %s;
             """, [user_id])
+            
             conn.commit()
             cursor.close()
             conn.close()
-            return "arrived"
+            
+            # Печатаем лог сделки в консоль сервера (позже выведем игроку в телеграм)
+            if report_msg:
+                print(f"[БОРТОВОЙ ЖУРНАЛ ИГРОКА {user_id}]: {report_msg}")
+            
+            # 3. Рекурсивно проверяем: возможно в очереди есть следующая точка? Полетели дальше!
+            return GameCore.check_and_update_flight_status(user_id)
             
         return "flying"
 
     @staticmethod
-    def get_ship_report(user_id: int) -> str:
-        """Формирует полный текстовый отчет о состоянии дирижабля."""
+    def get_ship_report(user_id: int) -> Dict[str, Any]:
+        """Формирует текущий статус корабля для вывода игроку."""
         GameCore.check_and_update_flight_status(user_id)
         p = db.get_player_data(user_id)
         if not p:
-            return "❌ Капитан не найден. Используйте /start для регистрации."
+            return {"error": "Корабль пропал с радаров рейнджеров."}
             
-        cargo = db.get_player_cargo_dict(user_id)
-        current_weight, current_volume = calculate_cargo_metrics(cargo)
-        
-        current_time = int(time.time())
         if p['status'] == 'В полете':
-            arrival = p.get('arrival_time')
-            if arrival and current_time < arrival:
-                remaining = int(arrival - current_time)
-                minutes = remaining // 60
-                seconds = remaining % 60
-                status_text = f"✈ В полете (Осталось: {minutes}м {seconds}с)"
-            else:
-                status_text = "✈ Завершает маневр посадки..."
-        else:
-            status_text = "⚓ В порту"
-            
-        report = (
-            f"🛸 **ДИРИЖАБЛЬ: {p['ship_type']}**\n"
-            f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-            f"💰 Кредиты: `{p['credits']}` 🪙\n"
-            f"⛽ Топливо: `{p['fuel']}/{p['max_fuel']}` Брл.\n"
-            f"📦 Масса трюма: `{current_weight}/{p['max_cargo']}` кг\n"
-            f"📐 Объем трюма: `{current_volume}/{p['max_volume']}` куб.м\n"
-            f"📍 Координаты: `[{p['x']}, {p['y']}]` \n"
-            f"📊 Статус: **{status_text}**\n"
-        )
-        return report
-
-    @staticmethod
-    def start_flight(user_id: int, target_city_name: str) -> Tuple[bool, str]:
-        """Инициализирует перелет реального времени."""
-        p = db.get_player_data(user_id)
-        if not p: 
-            return False, "Вы не зарегистрированы."
-        if p['status'] == 'В полете': 
-            return False, "❌ Ваш дирижабль уже находится в воздухе!"
-            
-        conn = db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT x, y FROM locations WHERE name = %s;", [target_city_name])
-        city = cursor.fetchone()
-        cursor.close()
-        conn.close()
-        
-        if not city:
-            return False, "🗺 Такой город не найден на полетных картах."
-            
-        tx, ty = city[0], city[1]
-        distance = math.hypot(tx - p['x'], ty - p['y'])
-        if distance == 0:
-            return False, "🏙 Вы уже находитесь в этом городе!"
-            
-        # === НАСТРОЙКА БАЛАНСА ВРЕМЕНИ ПОЛЕТА ===
-        # ship_speed = 10 
-        # travel_time = int(distance / ship_speed) 
-        travel_time = 10  # Временный тест на 10 секунд для проверок
-        # =======================================
-        
-        fuel_cost = 5
-        if p['fuel'] < fuel_cost:
-            return False, f"⛽ Недостаточно топлива! Для этого перелета нужно {fuel_cost} Брл."
-            
-        arrival_timestamp = int(time.time()) + travel_time
-        
-        conn = db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE players 
-            SET status = 'В полете', 
-                target_x = %s, 
-                target_y = %s, 
-                arrival_time = %s, 
-                fuel = fuel - %s 
-            WHERE user_id = %s;
-        """, [tx, ty, arrival_timestamp, fuel_cost, user_id])
-        conn.commit()
-        cursor.close()
-        conn.close()
-        
-        return True, f"🚀 Дирижабль отдал швартовы и взял курс на **{target_city_name}**! Время в пути: {travel_time} сек."
-
-    @staticmethod
-    def get_market_data(city_name: str) -> Dict[str, Dict[str, Any]]:
-        """
-        Собирает данные рынка города для инлайн-кнопок.
-        Сразу обсчитывает пассивное производство фабрик.
-        """
-        GameCore.update_city_production(city_name)
-        
-        from items import ITEMS_REGISTRY
-        market_profile = {}
-        
-        for item_id in ITEMS_REGISTRY.keys():
-            stock, base_demand = db.get_city_storage_data(city_name, item_id)
-            prices = calculate_dynamic_price(item_id, stock, base_demand)
-            
-            market_profile[item_id] = {
-                "stock": stock,
-                "buy_price": prices["buy_price"],
-                "sell_price": prices["sell_price"],
-                "is_contraband": prices["is_contraband"]
+            remains = max(0, int(p['arrival_time']) - int(time.time()))
+            return {
+                "status": "В небе",
+                "message": f"Дирижабль идет по приборам. Прибытие через {remains} сек.",
+                "fuel": f"{p['fuel']}/{p['max_fuel']}"
             }
-        return market_profile
+        
+        return {
+            "status": "В порту",
+            "message": f"Корабль пришвартован в координатах ({p['x']}, {p['y']}). Экипаж готов к заправке.",
+            "fuel": f"{p['fuel']}/{p['max_fuel']}"
+        }
