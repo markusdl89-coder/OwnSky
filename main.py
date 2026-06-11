@@ -67,5 +67,26 @@ def handle_menu(message):
 
 if __name__ == "__main__":
     init_db()
+    
+    # Автоматическое создание таблицы прямо из Python
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS flight_plans (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            queue_order INT NOT NULL,
+            target_x INT NOT NULL,
+            target_y INT NOT NULL,
+            action VARCHAR(30) DEFAULT 'none',
+            emergency_strategy VARCHAR(20) DEFAULT 'retreat', 
+            status VARCHAR(20) DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    conn.commit()
+    cursor.close()
+    conn.close()
+    
     start_hosting()
     bot.polling(none_stop=True)
