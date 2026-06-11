@@ -1,5 +1,5 @@
-import psycopg2
-from psycopg2 import extensions
+import pg8000
+
 from items import get_item
 from economy import calculate_dynamic_price
 
