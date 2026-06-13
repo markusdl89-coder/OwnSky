@@ -173,3 +173,4 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"Ошибка бот-поллинга: {e}")
             time.sleep(5)
+
