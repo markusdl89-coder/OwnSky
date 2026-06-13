@@ -1,11 +1,13 @@
 import os
 import telebot
 import pg8000
+import threading # Импортируем потоки для одновременной работы
 from urllib.parse import urlparse
-from bot_instance import bot  # Используем ваш объект бота
-from server import start_hosting  # Держим связь с Render, чтобы не упало
+from bot_instance import bot # Используем твой объект бота
+from server import start_hosting # Твой веб-сервер для Render
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
+# Берём ссылку на базу данных из настроек Рендера
+DATABASE_URL = os.environ.get('DATABASE_URL')
 
 def scan_neon_database():
     """Сканирует реальную структуру базы данных Neon."""
@@ -46,7 +48,7 @@ def scan_neon_database():
             """)
             columns = cursor.fetchall()
             for col in columns:
-                report += f"   • {col[0]} ({col[1]})\n"
+                report += f"  • {col[0]} ({col[1]})\n"
             report += "\n"
             
         cursor.close()
@@ -54,13 +56,14 @@ def scan_neon_database():
         return report
         
     except Exception as e:
-        return f"❌ Не удалось подключиться к Neon: {str(e)}"
+        return f"❌ Ошибка при подключении к базе данных: {str(e)}"
 
-# Хэндлер на любую команду/сообщение админа
+# Хэндлер для команды /scan
 @bot.message_handler(commands=['scan'])
 def handle_scan(message):
-    print("[System] Получена команда на сканирование базы...")
+    print("[System] Получена команда /scan, запускаю проверку базы...")
     db_report = scan_neon_database()
+    
     # Разбиваем на части, если отчет будет слишком длинным для одного сообщения
     if len(db_report) > 4096:
         for x in range(0, len(db_report), 4096):
@@ -71,9 +74,13 @@ def handle_scan(message):
 if __name__ == "__main__":
     print("[System] Запуск технического сканера...")
     
-    # 1. Запускаем сервер заглушку для Render, чтобы сервис не падал
-    start_hosting()
+    # ИСПРАВЛЕНИЕ: Запускаем сервер в фоновом потоке, чтобы он не блокировал бота
+    server_thread = threading.Thread(target=start_hosting)
+    server_thread.daemon = True # Поток закроется сам при остановке бота
+    server_thread.start()
     
-    # 2. Запускаем бота
-    print("[System] Бот успешно запущен. Напишите ему в Telegram команду /scan")
+    print("[System] Сервер заглушка запущен в фоновом режиме.")
+    print("[System] Включаю бота. Напишите ему в Telegram команду /scan")
+    
+    # Теперь бот гарантированно запустится
     bot.infinity_polling(timeout=20, long_polling_timeout=20)
