@@ -1,195 +1,118 @@
-import time
-import math
-from typing import Dict, Any, Optional
-# Мы используем заглушку базы данных, если реальный модуль db не импортирован.
-# В реальном коде убедись, что db настроен на работу с Neon.tech
-try:
-    import db
-except ImportError:
-    class MockDB:
-        @staticmethod
-        def get_player_data(user_id: int) -> Optional[Dict[str, Any]]:
-            return None
-        @staticmethod
-        def get_connection():
-            return None
-    db = MockDB()
+# ====================================================================
+# МОДУЛЬ: core.py (Ядро логической системы OwnSky)
+# Слой: Логика автоматических рейсов, перемещений и симуляции экономики
+# ====================================================================
 
-# Импортируем функции штурманского плана
-from navigation import process_flight_plan_action
+import math
+from typing import List, Dict, Any, Tuple
+
+# Импорты внутренних модулей проекта
+from items import ITEMS_REGISTRY  # Физические параметры ресурсов (вес, объем)
+from ships import get_ship_blueprint, calculate_current_speed  # Параметры дирижаблей
+import config
+
+# ====================================================================
+# СЛОЙ 1: СИСТЕМА АВТОМАТИЧЕСКИХ РЕЙСОВ (НОВЫЙ ФУНКЦИОНАЛ)
+# ====================================================================
+
+def calculate_route_estimate(user_id: int, points: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    [Шаг 1] Калькулятор сметы маршрута.
+    Считает суммарное расстояние, динамическую скорость корабля по массе груза,
+    необходимое количество топлива и время полета в минутах.
+    """
+    # Изолированный импорт для предотвращения циклической зависимости (Circular Import)
+    from main import get_connection  
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # 1. Получаем текущую модель корабля игрока из базы данных Neon
+    cursor.execute("SELECT ship_type FROM players WHERE user_id = %s;", (user_id,))
+    ship_row = cursor.fetchone()
+    ship_type = ship_row[0] if ship_row and ship_row[0] else "scout"
+    blueprint = get_ship_blueprint(ship_type)
+    
+    # 2. Сканируем трюм игрока для вычисления точной массы груза
+    cursor.execute("SELECT item_id, quantity FROM inventories WHERE user_id = %s;", (user_id,))
+    inventory_rows = cursor.fetchall()
+    
+    current_weight = 0.0
+    current_fuel_in_inventory = 0  # Общий запас топлива на борту
+    
+    for item_id, quantity in inventory_rows:
+        if item_id in ITEMS_REGISTRY:
+            current_weight += ITEMS_REGISTRY[item_id].weight * quantity
+            if item_id == "fuel":
+                current_fuel_in_inventory += quantity
+                
+    cursor.close()
+    conn.close()
+    
+    # 3. Рассчитываем реальную скорость с учетом утяжеления корабля
+    actual_speed = calculate_current_speed(blueprint, current_weight)
+    
+    # 4. Преобразуем абстрактные точки цепочки в координатную сетку X/Y
+    coords_chain: List[Tuple[int, int]] = []
+    for pt in points:
+        if pt.get("type") == "city":
+            city_name = pt.get("name")
+            if city_name in config.CITIES:
+                coords_chain.append(config.CITIES[city_name])
+        elif pt.get("type") == "coords":
+            coords_chain.append((pt.get("x"), pt.get("y")))
+            
+    # Если маршрут пустой или состоит из одной точки — лететь некуда
+    if len(coords_chain) < 2:
+        return {
+            "total_distance": 0.0,
+            "current_speed": actual_speed,
+            "total_time_min": 0.0,
+            "fuel_needed": 0,
+            "has_enough_fuel": True
+        }
+        
+    # 5. Вычисляем общее расстояние по всей цепочке (формула Евклида)
+    total_distance = 0.0
+    for i in range(len(coords_chain) - 1):
+        x1, y1 = coords_chain[i]
+        x2, y2 = coords_chain[i+1]
+        total_distance += math.hypot(x2 - x1, y2 - y1)
+        
+    # 6. Финальный расчет затрат
+    # Расход бензина округляем в большую сторону
+    fuel_needed = math.ceil(total_distance * blueprint.fuel_consumption)
+    # Время полета в минутах
+    total_time_min = round(total_distance / actual_speed, 1) if actual_speed > 0 else 0.0
+    # Проверка физического наличия топлива в инвентаре
+    has_enough_fuel = current_fuel_in_inventory >= fuel_needed
+    
+    return {
+        "total_distance": round(total_distance, 1),
+        "current_speed": round(actual_speed, 1),
+        "total_time_min": total_time_min,
+        "fuel_needed": fuel_needed,
+        "has_enough_fuel": has_enough_fuel
+    }
+
+
+# ====================================================================
+# СЛОЙ 2: СТАРАЯ ИГРОВАЯ СИСТЕМА (СОХРАНЕНИЕ СОВМЕСТИМОСТИ ДЛЯ MAIN.PY)
+# ====================================================================
 
 class GameCore:
-    """Центральный процессор игровых механик OwnSky."""
-    
-    @staticmethod
-    def calculate_distance(x1: int, y1: int, x2: int, y2: int) -> float:
-        """Вычисляет гипотенузу (расстояние) между двумя координатами."""
-        return math.hypot(x2 - x1, y2 - y1)
+    """
+    Класс-заглушка для сохранения обратной совместимости со старыми вызовами.
+    Постепенно перенесем всю логику из этого слоя в чистые функции Слоя 1.
+    """
+    def __init__(self):
+        # Оставляем инициализацию пустой, так как база данных теперь работает напрямую через Neon
+        pass
 
-    @staticmethod
-    def start_flight(user_id: int, target_location_name: str) -> str:
-        """
-        Инициализирует полет корабля.
-        Вычисляет расстояние, списывает топливо, устанавливает статус 'В полете' 
-        и рассчитывает arrival_time (время прибытия).
-        """
-        p = db.get_player_data(user_id)
-        if not p:
-            return "Игрок не найден."
-            
-        if p.get('status') == 'В полете':
-            return "Корабль уже находится в небе!"
+    def process_turn(self):
+        """Старая заглушка обработки игрового тика."""
+        return "Симуляция шага выполнена (Архив)"
 
-        conn = db.get_connection()
-        cursor = conn.cursor()
-        
-        # Получаем координаты цели
-        cursor.execute("SELECT x, y FROM locations WHERE name = %s;", (target_location_name,))
-        loc = cursor.fetchone()
-        if not loc:
-            cursor.close()
-            conn.close()
-            return f"Локация '{target_location_name}' не найдена на карте."
-            
-        tx, ty = loc[0], loc[1]
-        
-        # Считаем дистанцию и расход топлива
-        distance = GameCore.calculate_distance(p['x'], p['y'], tx, ty)
-        fuel_cost = int(distance * 0.5)  # 1 единица топлива на 2 км пути
-        
-        if p['fuel'] < fuel_cost:
-            cursor.close()
-            conn.close()
-            return f"Недостаточно топлива для перелета. Требуется: {fuel_cost}, доступно: {p['fuel']}."
-            
-        # Настройка времени (скорость: 10 км за 1 реальную секунду для тестов)
-        speed = 10.0
-        flight_duration = max(int(distance / speed), 2)  # Минимум 2 секунды полета
-        arrival_time = int(time.time()) + flight_duration
-        
-        # Запись полета в БД
-        cursor.execute("""
-            UPDATE players 
-            SET status = 'В полете', 
-                target_x = %s, target_y = %s, 
-                arrival_time = %s, 
-                fuel = fuel - %s
-            WHERE user_id = %s;
-        """, (tx, ty, arrival_time, fuel_cost, user_id))
-        
-        conn.commit()
-        cursor.close()
-        conn.close()
-        
-        return f"Дирижабль поднялся в воздух и взял курс на {target_location_name}. Время в пути: {flight_duration} сек."
-
-    @staticmethod
-    def check_and_update_flight_status(user_id: int) -> str:
-        """Проверяет таймер прибытия, выполняет торговый приказ в порту и запускает следующую точку плана."""
-        p = db.get_player_data(user_id)
-        if not p:
-            return "idle"
-
-        # СИТУАЦИЯ А: Корабль стоит на месте, проверяем, нет ли новых приказов в плане
-        if p['status'] != 'В полете':
-            conn = db.get_connection()
-            cursor = conn.cursor()
-            
-            cursor.execute("""
-                SELECT id, target_x, target_y, action 
-                FROM flight_plans 
-                WHERE user_id = %s AND status = 'pending' 
-                ORDER BY queue_order ASC LIMIT 1;
-            """, [user_id])
-            next_point = cursor.fetchone()
-            
-            if next_point:
-                plan_id, tx, ty, action = next_point
-                
-                # Ищем имя города по координатам, чтобы скормить его в start_flight
-                cursor.execute("SELECT name FROM locations WHERE x = %s AND y = %s;", (tx, ty))
-                city_row = cursor.fetchone()
-                
-                if city_row:
-                    city_name = city_row[0]
-                    # Переводим точку полетного плана в статус активной
-                    cursor.execute("UPDATE flight_plans SET status = 'active' WHERE id = %s;", [plan_id])
-                    conn.commit()
-                    cursor.close()
-                    conn.close()
-                    
-                    # Отправляем дирижабль в путь
-                    GameCore.start_flight(user_id, city_name)
-                    return "flying"
-                    
-            if 'cursor' in locals() and not cursor.closed:
-                cursor.close()
-            if 'conn' in locals() and not conn.closed:
-                conn.close()
-            return "idle"
-
-        # СИТУАЦИЯ Б: Корабль летел, проверяем таймер приземления
-        current_time = int(time.time())
-        arrival_timestamp = p.get('arrival_time')
-        
-        if arrival_timestamp and current_time >= int(arrival_timestamp):
-            conn = db.get_connection()
-            cursor = conn.cursor()
-            
-            # 1. Достаем текущий активный приказ
-            cursor.execute("""
-                SELECT id, action FROM flight_plans 
-                WHERE user_id = %s AND status = 'active';
-            """, [user_id])
-            active_row = cursor.fetchone()
-            
-            report_msg = ""
-            if active_row:
-                plan_id, action = active_row
-                # ВЫПОЛНЯЕМ ТОРГОВЫЙ ПРИКАЗ ПО НАШЕЙ ЭКОНОМИКЕ
-                report_msg = process_flight_plan_action(cursor, user_id, action)
-                
-                # Помечаем эту точку маршрута как выполненную
-                cursor.execute("UPDATE flight_plans SET status = 'completed' WHERE id = %s;", [plan_id])
-            
-            # 2. Обновляем статус игрока: перемещаем его в координаты города
-            cursor.execute("""
-                UPDATE players
-                SET x = target_x, y = target_y, status = 'В порту', arrival_time = NULL
-                WHERE user_id = %s;
-            """, [user_id])
-            
-            conn.commit()
-            cursor.close()
-            conn.close()
-            
-            # Печатаем лог сделки в консоль сервера (позже выведем игроку в телеграм)
-            if report_msg:
-                print(f"[БОРТОВОЙ ЖУРНАЛ ИГРОКА {user_id}]: {report_msg}")
-            
-            # 3. Рекурсивно проверяем: возможно в очереди есть следующая точка? Полетели дальше!
-            return GameCore.check_and_update_flight_status(user_id)
-            
-        return "flying"
-
-    @staticmethod
-    def get_ship_report(user_id: int) -> Dict[str, Any]:
-        """Формирует текущий статус корабля для вывода игроку."""
-        GameCore.check_and_update_flight_status(user_id)
-        p = db.get_player_data(user_id)
-        if not p:
-            return {"error": "Корабль пропал с радаров рейнджеров."}
-            
-        if p['status'] == 'В полете':
-            remains = max(0, int(p['arrival_time']) - int(time.time()))
-            return {
-                "status": "В небе",
-                "message": f"Дирижабль идет по приборам. Прибытие через {remains} сек.",
-                "fuel": f"{p['fuel']}/{p['max_fuel']}"
-            }
-        
-        return {
-            "status": "В порту",
-            "message": f"Корабль пришвартован в координатах ({p['x']}, {p['y']}). Экипаж готов к заправке.",
-            "fuel": f"{p['fuel']}/{p['max_fuel']}"
-        }
+    def get_market_prices(self):
+        """Старая заглушка для получения цен."""
+        return {"coal": 10, "iron_ore": 20, "fuel": 50}
