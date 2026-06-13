@@ -1,7 +1,28 @@
 import time
-from bot_instance import bot, get_main_menu, get_fleet_menu
+from telebot import types
+from bot_instance import bot
 from server import start_hosting
 from database import get_connection, init_db
+
+# =====================================================================
+# КЛАВИАТУРЫ И ИНТЕРФЕЙС (Исправлено: меню теперь внутри файла)
+# =====================================================================
+
+def get_main_menu():
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.row("🎪 Мой Лагерь", "🚢 Флот Дирижаблей")
+    markup.row("💰 Биржа и Экономика", "🎒 Трюм и Предметы")
+    return markup
+
+def get_fleet_menu():
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.row("⬅️ Главное меню")
+    return markup
+
+
+# =====================================================================
+# ХЭНДЛЕРЫ И ЛОГИКА КНОПОК
+# =====================================================================
 
 @bot.message_handler(commands=['start'])
 def handle_start(message):
@@ -15,7 +36,7 @@ def handle_fleet(message):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            # Инициализируем игрока в БД Neon.tech, выдавая дефолтный scout
+            # Безопасно инициализируем игрока в БД Neon.tech, выдавая дефолтный scout
             cur.execute("""
                 INSERT INTO players (user_id, gold, ship_type, route_paused)
                 VALUES (%s, 1000, 'scout', FALSE)
@@ -35,25 +56,17 @@ def handle_fleet(message):
 
     status_text = "⏸ На паузе" if current_route_id else "⚓ В порту"
     
-    # Максимально простой вывод без подгрузки сторонних модулей
+    # Облегченный вывод для проверки стабильности сервера
     report = [
         f"🚢 *Ваш Флот:* Ветроход Скаут",
         f"👤 Капитан: {username}",
         f"💰 Баланс: {gold} золотых",
         f"📍 Статус: {status_text}",
         "",
-        "ℹ️характеристики груза временно отключены для проверки стабильности билда."
+        "ℹ️ Модули items и ships временно отключены для проверки деплоя."
     ]
     
     bot.send_message(message.chat.id, "\n".join(report), reply_markup=get_fleet_menu(), parse_mode="Markdown")
-
-@bot.message_handler(func=lambda msg: msg.text == "🗑️ Сбросить полетный план")
-def handle_clear_plan(message):
-    bot.send_message(message.chat.id, "⚙️ Кнопка временно на техобслуживании.")
-
-@bot.message_handler(func=lambda msg: msg.text == "🗺️ Добавить точку (Тест А -> Б)")
-def handle_add_test_route(message):
-    bot.send_message(message.chat.id, "⚙️ Старая штурманская заглушка отключена.")
 
 @bot.message_handler(func=lambda msg: msg.text == "⬅️ Главное меню")
 def handle_back(message):
@@ -62,6 +75,11 @@ def handle_back(message):
 @bot.message_handler(func=lambda msg: msg.text in ["🎪 Мой Лагерь", "💰 Биржа и Экономика", "🎒 Трюм и Предметы"])
 def handle_menu(message):
     bot.send_message(message.chat.id, f"Раздел {message.text} в разработке.")
+
+
+# =====================================================================
+# ИНИЦИАЛИЗАЦИЯ И ЗАПУСК СЕРВЕРА
+# =====================================================================
 
 if __name__ == "__main__":
     init_db()
