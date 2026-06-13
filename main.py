@@ -68,9 +68,23 @@ def handle_menu(message):
 if __name__ == "__main__":
     init_db()
     
-    # Автоматическое создание таблицы прямо из Python
+        # Автоматическое создание таблиц в базе данных Neon
     conn = get_connection()
     cursor = conn.cursor()
+    
+    # 1. Создаем или обновляем таблицу игроков для работы с кораблями и рейсами
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS players (
+            user_id BIGINT PRIMARY KEY,
+            gold INT DEFAULT 1000,
+            ship_type TEXT DEFAULT 'scout',
+            current_route_id INT DEFAULT NULL,
+            current_route_step INT DEFAULT 0,
+            route_paused BOOLEAN DEFAULT FALSE
+        );
+    """)
+    
+    # 2. Существующая таблица планов полетов (сохраняем структуру, чтобы ничего не сломать)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS flight_plans (
             id SERIAL PRIMARY KEY,
@@ -88,5 +102,6 @@ if __name__ == "__main__":
     cursor.close()
     conn.close()
     
+    # Запуск хостинга вебхуков и самого бота
     start_hosting()
     bot.polling(none_stop=True)
