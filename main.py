@@ -1,61 +1,90 @@
-# main.py
-import os
 import asyncio
+import logging
+import os
 import importlib
-from aiogram import types
+import pkgutil
+from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.memory import MemoryStorage
 
-# Импортируем движок бота и реестр кнопок
-from bot_instance import dp, bot  
-from interface import GAME_BUTTONS, get_game_keyboard
-import server  # Наш веб-сервер для Render
+# Настройка логирования для Render (вывод в stdout)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
-def auto_load_modules():
-    """Автоматически находит и включает все игровые файлы в репозитории"""
-    system_files = {
-        'main.py', 'main_old.py', 'bot_instance.py', 
-        'config.py', 'database.py', 'server.py', 'interface.py'
-    }
+
+def setup_routers(dispatcher: Dispatcher) -> None:
+    """
+    Автоматически сканирует папку handlers/, динамически импортирует 
+    все модули и регистрирует их роутеры в Диспетчере.
+    """
+    # Определяем абсолютный путь к папке handlers
+    handlers_path = os.path.join(os.path.dirname(__file__), "handlers")
     
-    for filename in os.listdir('.'):
-        if filename.endswith('.py') and filename not in system_files:
-            module_name = filename[:-3]
-            try:
-                # Втягиваем модуль в память — кнопка сама зарегистрируется в interface
-                importlib.import_module(module_name)
-                print(f"[System] Модуль успешно подключен: {filename}")
-            except Exception as e:
-                print(f"[Error] Ошибка при авто-подключении {filename}: {e}")
+    if not os.path.exists(handlers_path):
+        logger.error(f"Критическая ошибка: Папка '{handlers_path}' не найдена!")
+        return
 
-async def main():
-    print("🤖 Запуск асинхронного Умного Диспетчера (Aiogram 3)...")
-    
-    # 1. Автоматически подключаем все слои игры
-    auto_load_modules() 
-    
-    # 2. Включаем ваш родной сервер для Render (как раз ту самую функцию!)
-    print("🌐 Активация хостинга на Render...")
-    server.start_hosting() 
-    
-    # 3. Включаем постоянное слушание Телеграма
-    print("🚀 Бот успешно запущен и слушает игроков!")
-    await dp.start_polling(bot, skip_updates=True)
+    logger.info("Запуск автоматического сканирования модулей в handlers/...")
 
-# Главный распределитель сообщений
-@dp.message(lambda message: message.text)
-async def main_dispatcher(message: types.Message):
-    text = message.text
+    # Рекурсивно обходим пакет handlers
+    for _, module_name, is_pkg in pkgutil.walk_packages([handlers_path], prefix="handlers."):
+        if is_pkg:
+            continue  # Пропускаем папки-пакеты, ищем только файлы модулей
+            
+        try:
+            # Динамически импортируем модуль
+            module = importlib.import_module(module_name)
+            
+            # Проверяем, есть ли внутри модуля переменная router
+            if hasattr(module, "router"):
+                dispatcher.include_router(module.router)
+                logger.info(f" Successfully registered router from: {module_name}")
+            else:
+                logger.warning(f" Модуль {module_name} загружен, но в нем нет переменной 'router'")
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка при импорте модуля {module_name}: {e}", exc_info=True)
 
-    # Если нажатая кнопка совпадает со списком в interface.py
-    if text in GAME_BUTTONS:
-        # Передаем управление этому слою игры
-        await GAME_BUTTONS[text](message)
-    else:
-        # Если команда /start или неизвестный текст — выдаем автоматическое меню
-        await message.answer(
-            "Приветствую на мостике корабля, Капитан! Системы готовы к работе.", 
-            reply_markup=get_game_keyboard()
-        )
+
+async def main() -> None:
+    """
+    Главная точка входа в игру OwnSky.
+    Инициализирует окружение, бота и запускает слепой диспетчер.
+    """
+    # 1. Чтение и валидация переменных окружения
+    bot_token = os.getenv("BOT_TOKEN")
+    database_url = os.getenv("DATABASE_URL")
+
+    if not bot_token:
+        logger.critical("Критическая ошибка: Переменная среды BOT_TOKEN не задана!")
+        return
+    if not database_url:
+        logger.critical("Критическая ошибка: Переменная среды DATABASE_URL не задана!")
+        return
+
+    logger.info("OwnSky Core: Переменные окружения успешно валидированы.")
+
+    # 2. Инициализация Bot и Dispatcher с поддержкой FSM в памяти
+    bot = Bot(token=bot_token)
+    storage = MemoryStorage()
+    dp = Dispatcher(storage=storage)
+
+    # 3. Автоматическое подключение всех игровых модулей
+    setup_routers(dp)
+
+    # 4. Запуск Long Polling
+    logger.info("OwnSky запущен и готов к обработке команд аэронавтов! 🪐")
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await bot.session.close()
+        logger.info("Сессия бота успешно закрыта. Работа OwnSky Core завершена.")
+
 
 if __name__ == "__main__":
-    # Запуск асинхронного ядра
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Бот остановлен вручную.")
