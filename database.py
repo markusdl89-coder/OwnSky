@@ -171,3 +171,29 @@ def get_city_storage_data(city_name: str, item_name: str) -> Tuple[int, int]:
     if row:
         return row[0], row[1]
     return 100, 100
+
+# ДОПИСАТЬ В САМЫЙ КОНЕЦ ФАЙЛА database.py
+
+def register_new_player(user_id: int, username: str) -> bool:
+    """Функция записывает нового игрока в базу данных Neon с его никнеймом"""
+    query = """
+    INSERT INTO players (user_id, username, credits, ship_type, fuel, x, y, status)
+    VALUES (%s, %s, 5000, 'Старатель', 100, 0, 0, 'В порту')
+    ON CONFLICT (user_id) DO NOTHING;
+    """
+    conn = get_db_connection()
+    if conn is None:
+        print("Ошибка подключения к базе данных при регистрации!")
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(query, (user_id, username))
+            conn.commit()
+            print(f"Игрок {username} (ID: {user_id}) успешно зарегистрирован в Neon!")
+            return True
+    except Exception as e:
+        print(f"Ошибка при выполнении запроса регистрации: {e}")
+        return False
+    finally:
+        conn.close()
+
