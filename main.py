@@ -1,56 +1,61 @@
 # main.py
 import os
+import asyncio
 import importlib
 from aiogram import types
-from aiogram.utils import executor
 
-# Импортируем вашего бота и реестр кнопок
+# Импортируем движок бота и реестр кнопок
 from bot_instance import dp, bot  
 from interface import GAME_BUTTONS, get_game_keyboard
-import server  # Запуск вашего веб-сервера для деплоя на Render
+import server  # Наш веб-сервер для Render
 
 def auto_load_modules():
     """Автоматически находит и включает все игровые файлы в репозитории"""
-    # Список системных файлов, которые НЕ являются игровыми кнопками
     system_files = {
         'main.py', 'main_old.py', 'bot_instance.py', 
         'config.py', 'database.py', 'server.py', 'interface.py'
     }
     
-    # Сканируем корень репозитория
     for filename in os.listdir('.'):
-        # Ищем только файлы кода Python, игнорируя системные
         if filename.endswith('.py') and filename not in system_files:
-            module_name = filename[:-3] # Отрезаем ".py" от имени файла
+            module_name = filename[:-3]
             try:
-                # Загружаем модуль в память — в этот момент он сам регистрирует свою кнопку
+                # Втягиваем модуль в память — кнопка сама зарегистрируется в interface
                 importlib.import_module(module_name)
-                print(f" Модуль успешно подключен: {filename}")
+                print(f"[System] Модуль успешно подключен: {filename}")
             except Exception as e:
-                print(f"❌ Ошибка при авто-подключении {filename}: {e}")
+                print(f"[Error] Ошибка при авто-подключении {filename}: {e}")
 
-@dp.message_handler(content_types=types.ContentType.TEXT)
+async def main():
+    print("🤖 Запуск асинхронного Умного Диспетчера (Aiogram 3)...")
+    
+    # 1. Автоматически подключаем все слои игры
+    auto_load_modules() 
+    
+    # 2. Включаем ваш родной сервер для Render (как раз ту самую функцию!)
+    print("🌐 Активация хостинга на Render...")
+    server.start_hosting() 
+    
+    # 3. Включаем постоянное слушание Телеграма
+    print("🚀 Бот успешно запущен и слушает игроков!")
+    await dp.start_polling(bot, skip_updates=True)
+
+# Главный распределитель сообщений
+@dp.message(lambda message: message.text)
 async def main_dispatcher(message: types.Message):
-    """Главный распределитель: ловит сообщения игрока со смартфона"""
     text = message.text
 
-    # Если текст нажатой кнопки совпадает с зарегистрированным игровым модулем
+    # Если нажатая кнопка совпадает со списком в interface.py
     if text in GAME_BUTTONS:
-        # Передаем управление в этот модуль!
+        # Передаем управление этому слою игры
         await GAME_BUTTONS[text](message)
     else:
-        # Если команда неизвестна (или старт) — выдаем автоматическое меню кнопок
+        # Если команда /start или неизвестный текст — выдаем автоматическое меню
         await message.answer(
-            "Приветствую на мостике корабля, Капитан! Все системы готовы к работе.", 
+            "Приветствую на мостике корабля, Капитан! Системы готовы к работе.", 
             reply_markup=get_game_keyboard()
         )
 
 if __name__ == "__main__":
-    print("🤖 Запуск Умного Диспетчера...")
-    auto_load_modules() # 1. Сами нашли и подключили все файлы игры
-    
-    print("🌐 Запуск веб-сервера под Render...")
-    server.start()       # 2. Держим порт для бесперебойной работы хостинга
-    
-    print("🚀 Бот успешно запущен в Telegram!")
-    executor.start_polling(dp, skip_updates=True) # 3. Включаем прием сообщений
+    # Запуск асинхронного ядра
+    asyncio.run(main())
